@@ -438,23 +438,6 @@
     });
   });
 
-  $('mExtract').addEventListener('click', function () {
-    motion('extractPrecomp', [], function (r) { return plural(r.count, 'layer') + ' extracted from the precomp.'; });
-  });
-  $('mMerge').addEventListener('click', function () {
-    motion('mergeShapes', [], function (r) {
-      return plural(r.count, 'shape layer') + ' merged.' + (r.parented ? ' Note: parenting of ' + r.parented + ' layer(s) was not kept.' : '');
-    });
-  });
-  $('mNull').addEventListener('click', function () {
-    motion('addNullParent', [], function (r) {
-      return '"' + r.name + '" created' + (r.count ? ' and ' + plural(r.count, 'layer') + ' parented to it.' : '.');
-    });
-  });
-  $('mShape').addEventListener('click', function () {
-    motion('convertToShape', [], function (r) { return plural(r.count, 'layer') + ' converted to shapes.'; });
-  });
-
   Array.prototype.forEach.call(document.querySelectorAll('[data-new]'), function (b) {
     b.addEventListener('click', function () {
       motion('newLayer', [b.getAttribute('data-new')], function (r) { return '"' + r.name + '" created.'; });

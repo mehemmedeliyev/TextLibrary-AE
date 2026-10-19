@@ -842,6 +842,30 @@ body.scrubbing, body.scrubbing * { cursor: ew-resize !important; }
 .m-row:hover { background: #1d1d21; border-color: var(--border); }
 .m-row:hover svg { color: var(--accent); }
 
+/* highlighted single action */
+.m-row.featured {
+  height: auto;
+  padding: 10px 12px;
+  gap: 12px;
+  background: rgba(var(--accent-rgb), .07);
+  border-color: rgba(var(--accent-rgb), .3);
+}
+.m-row.featured:hover { background: rgba(var(--accent-rgb), .13); border-color: rgba(var(--accent-rgb), .6); }
+.m-ico {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--accent-rgb), .16);
+  flex: 0 0 auto;
+}
+.m-row.featured svg { color: var(--accent); width: 15px; height: 15px; }
+.m-txt { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.m-txt b { font-weight: 600; color: #fff; }
+.m-txt small { font-size: 10.5px; color: var(--muted); }
+
 /* new layer chips */
 .m-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .m-chip {
