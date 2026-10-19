@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Text Library</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body data-tab="browse">
+  <header class="topbar">
+    <nav class="tabs">
+      <button class="tab active" data-tab="browse">
+        <svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>
+        Browse
+      </button>
+      <button class="tab" data-tab="flow">
+        <svg viewBox="0 0 16 16"><path d="M2 13c4 0 3.5-10 12-10"/><circle cx="2" cy="13" r="1.2"/><circle cx="14" cy="3" r="1.2"/></svg>
+        Flow
+      </button>
+      <button class="tab" data-tab="edit">
+        <svg viewBox="0 0 16 16"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></svg>
+        Edit
+      </button>
+    </nav>
+    <button class="pill-btn" id="btnDeepCopy" title="Create a fully independent copy of the selected precomp (including all nested precomps)">
+      <svg viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg>
+      Deep Copy
+    </button>
+    <button class="pill-btn" id="btnNew" title="Add a new layer to the active composition">
+      <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>
+      Add
+      <svg class="chev" viewBox="0 0 16 16"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg>
+    </button>
+    <div class="spacer"></div>
+    <button class="round-btn" id="btnRefresh" title="Refresh library">
+      <svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
+    </button>
+    <button class="round-btn" id="btnSettings" title="Settings">
+      <svg class="gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
+    <button class="cta" id="btnSave">
+      <span class="cta-dot"><svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg></span>
+      Save to Library
+    </button>
+  </header>
+
+  <!-- BROWSE -->
+  <main class="view" id="view-browse">
+    <aside class="sidebar">
+      <div class="search">
+        <svg class="search-icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+        <input type="text" id="search" placeholder="Search presets..." autocomplete="off">
+      </div>
+      <div class="side-label">Categories</div>
+      <ul class="cats" id="cats"></ul>
+      <button class="pill-btn add-cat" id="btnAddCat">
+        <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>
+        New category
+      </button>
+    </aside>
+    <section class="content">
+      <div class="content-head" id="contentHead"></div>
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty" hidden></div>
+    </section>
+  </main>
+
+  <!-- EDIT -->
+  <main class="view" id="view-edit" hidden>
+    <div class="edit-wrap">
+      <div class="edit-head">
+        <div class="edit-title" id="editTitle">No composition selected</div>
+        <div class="hint">Select a precomp layer in the timeline or a composition in the Project panel - it loads automatically.</div>
+      </div>
+      <div class="comp-card" id="durBox" hidden>
+        <div class="dur-box size-row">
+          <div class="dur-label">
+            <span class="dur-title">
+              <svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M2.5 6h11M6 2.5v11"/></svg>
+              Size
+            </span>
+            <span class="dur-old" id="sizeOld"></span>
+          </div>
+          <div class="size-fields">
+            <label class="size-field"><span>W</span><input type="number" id="sizeW" min="4" max="30000" step="1"></label>
+            <span class="size-x">&times;</span>
+            <label class="size-field"><span>H</span><input type="number" id="sizeH" min="4" max="30000" step="1"></label>
+            <button class="size-tool" id="sizeLink" title="Lock aspect ratio">
+              <svg viewBox="0 0 16 16"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1.2-1.2a2.6 2.6 0 0 1 3.7 3.7L10.7 8.2"/><path d="M9 11.5l-1.2 1.2a2.6 2.6 0 0 1-3.7-3.7L5.3 7.8"/></svg>
+            </button>
+            <button class="size-tool" id="sizeSwap" title="Swap width and height">
+              <svg viewBox="0 0 16 16"><path d="M3 5.5h10M10.5 3L13 5.5 10.5 8"/><path d="M13 10.5H3M5.5 8L3 10.5 5.5 13"/></svg>
+            </button>
+          </div>
+          <span class="dur-tc" id="sizeRatio"></span>
+          <button class="cta small dur-ok" id="sizeOk">OK</button>
+        </div>
+        <div class="dur-box">
+          <div class="dur-label">
+            <span class="dur-title">
+              <svg viewBox="0 0 16 16"><circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1.5M6.5 1.5h3"/></svg>
+              Duration
+            </span>
+            <span class="dur-old" id="durOld"></span>
+          </div>
+          <div class="dur-dial">
+            <button class="dur-step" data-step="-1" title="-1 second (Shift: -0.5)">&minus;</button>
+            <div class="dur-value">
+              <input type="number" id="durInput" min="0.1" step="1">
+              <span>sec</span>
+            </div>
+            <button class="dur-step" data-step="1" title="+1 second (Shift: +0.5)">+</button>
+          </div>
+          <div class="dur-chips" id="durChips"></div>
+          <span class="dur-tc" id="durTc"></span>
+          <button class="cta small dur-ok" id="durOk">OK</button>
+        </div>
+      </div>
+      <div id="editList" class="edit-list"></div>
+    </div>
+  </main>
+
+  <!-- FLOW -->
+  <main class="view" id="view-flow" hidden>
+    <div class="flow-left">
+      <div class="flow-studio">
+        <div class="flow-head">
+          <span class="flow-sel-name" id="flowSelName"></span>
+          <button class="round-btn small" id="flowDelete" title="Delete selected curve" disabled>
+            <svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5"/></svg>
+          </button>
+        </div>
+
+        <svg class="flow-editor" id="flowEditor" viewBox="0 0 220 220"></svg>
+
+        <!-- motion preview: keyframe to keyframe, ticks show spacing per frame -->
+        <div class="flow-preview" id="flowPreview" title="Each tick is one frame step: close ticks = slow, wide gaps = fast">
+          <div class="flow-track"></div>
+          <span class="flow-key start"></span>
+          <span class="flow-key end"></span>
+          <div class="flow-ticks" id="flowGhosts"></div>
+          <div class="flow-ball" id="flowBall"></div>
+        </div>
+
+        <label class="flow-values">
+          <span>cubic-bezier(</span>
+          <input type="text" id="flowValues" spellcheck="false" title="x1, y1, x2, y2">
+          <span>)</span>
+        </label>
+      </div>
+      <div class="flow-actions">
+        <button class="pill-btn" id="flowSave" title="Save this curve to My curves">
+          <svg viewBox="0 0 16 16"><path d="M8 2l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/></svg>
+          Save
+        </button>
+        <button class="cta flow-apply" id="flowApply">Apply to keyframes</button>
+      </div>
+      <p class="hint">Select at least 2 keyframes in the timeline, then Apply. Double-click a curve to apply it directly.</p>
+    </div>
+    <div class="flow-right">
+      <div id="flowLists"></div>
+    </div>
+  </main>
+
+  <footer class="statusbar">
+    <span class="status-dot"></span>
+    <span id="status">Ready</span>
+  </footer>
+
+  <!-- SAVE MODAL -->
+  <div class="modal-back" id="saveModal" hidden>
+    <div class="modal">
+      <h3>Save to Library</h3>
+      <label class="field">
+        <span>Type</span>
+        <div class="seg" id="saveType">
+          <button data-type="simple" class="active">Text animation</button>
+          <button data-type="complex">Composition</button>
+        </div>
+      </label>
+      <p class="hint" id="saveTypeHint"></p>
+      <label class="field">
+        <span>Name</span>
+        <input type="text" id="saveName" placeholder="e.g. Ease Fade Up">
+      </label>
+      <label class="field">
+        <span>Category</span>
+        <select id="saveCat"></select>
+      </label>
+      <p class="warn">The project will be saved and reopened automatically (undo history is cleared).</p>
+      <div class="modal-actions">
+        <button class="pill-btn" data-close>Cancel</button>
+        <button class="cta" id="btnDoSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEW CATEGORY MODAL -->
+  <div class="modal-back" id="catModal" hidden>
+    <div class="modal small">
+      <h3>New category</h3>
+      <label class="field">
+        <span>Name</span>
+        <input type="text" id="catName" placeholder="e.g. Titles">
+      </label>
+      <div class="modal-actions">
+        <button class="pill-btn" data-close>Cancel</button>
+        <button class="cta" id="btnDoAddCat">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS MODAL -->
+  <div class="modal-back" id="settingsModal" hidden>
+    <div class="modal">
+      <h3>Settings</h3>
+      <label class="field">
+        <span>Library folder</span>
+        <div class="row">
+          <input type="text" id="libPath" readonly>
+          <button class="pill-btn" id="btnPickLib">Browse...</button>
+        </div>
+      </label>
+      <div class="modal-actions">
+        <button class="pill-btn" id="btnOpenLib">Open folder</button>
+        <div class="spacer"></div>
+        <button class="cta" data-close>Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <div class="modal-back" id="confirmModal" hidden>
+    <div class="modal small">
+      <h3 id="confirmTitle">Are you sure?</h3>
+      <p id="confirmText" class="hint"></p>
+      <div class="modal-actions">
+        <button class="pill-btn" data-close>Cancel</button>
+        <button class="cta danger" id="btnConfirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CURVE NAME MODAL -->
+  <div class="modal-back" id="curveModal" hidden>
+    <div class="modal small">
+      <h3>Save curve</h3>
+      <label class="field">
+        <span>Name</span>
+        <input type="text" id="curveName" placeholder="e.g. Smooth Pop">
+      </label>
+      <div class="modal-actions">
+        <button class="pill-btn" data-close>Cancel</button>
+        <button class="cta" id="btnDoSaveCurve">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CARD MENU -->
+  <div class="menu" id="cardMenu" hidden>
+    <button data-action="reveal">Show in folder</button>
+    <button data-action="delete" class="danger-text">Delete</button>
+  </div>
+
+  <!-- NEW LAYER MENU -->
+  <div class="menu" id="newMenu" hidden>
+    <button data-type="text">Text</button>
+    <button data-type="null">Null</button>
+    <button data-type="adjustment">Adjustment Layer</button>
+    <button data-type="shape">Shape Layer</button>
+  </div>
+
+  <!-- BUSY OVERLAY -->
+  <div class="busy" id="busy" hidden>
+    <div class="spinner"></div>
+    <div id="busyText">Please wait...</div>
+  </div>
+
+  <script src="js/main.js"></script>
+  <script src="js/flow.js"></script>
+</body>
+</html>
