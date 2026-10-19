@@ -308,9 +308,13 @@ TL.mapTime = function (t, ctx) {
     return t - ctx.srcStart + ctx.dstIn;
 };
 
-/* Groups added by a preset are tagged "<name> [<preset>]" so Remove can find them. */
+/*
+ * Animators and masks added by a preset are tagged "<name> [<preset>]" so Remove can find them.
+ * Effects keep their exact names (expressions refer to them, e.g. effect("Elasticity")) -
+ * they are recorded in the layer comment instead.
+ */
 TL.tag = function (label) { return " [" + label + "]"; };
-TL.TAG_PARENTS = { "ADBE Text Animators": 1, "ADBE Effect Parade": 1, "ADBE Mask Parade": 1 };
+TL.TAG_PARENTS = { "ADBE Text Animators": 1, "ADBE Mask Parade": 1 };
 
 /* Small JSON blobs in the layer comment, one line per tag: "[TAG]{...}" */
 TL.markRe = function (tag) { return new RegExp("\\n?\\[" + tag + "\\](\\{[^\\n]*\\})"); };
@@ -454,6 +458,7 @@ TL.copyGroup = function (sg, dstLayer, dPath, ctx, opts) {
             if (!added) continue;
             childKey = added.propertyIndex;
             try { added.name = sp.name + (ctx.label && TL.TAG_PARENTS[dg.matchName] ? TL.tag(ctx.label) : ""); } catch (eN) {}
+            if (dg.matchName === "ADBE Effect Parade" && ctx.record) ctx.record.fx.push({ mn: sp.matchName, n: sp.name });
             try { added.enabled = sp.enabled; } catch (eEn) {}
             if (sp.matchName === "ADBE Mask Atom") TL.copyMaskAttrs(sp, added);
             if (sp.matchName === "ADBE Text Animator") TL.clearAnimator(dstLayer, dPath.concat([childKey]));
@@ -480,7 +485,12 @@ TL.copyLayerAnimation = function (src, dst, srcComp, mode, label) {
         dstIn: dst.inPoint, dstOut: dst.outPoint,
         center: [srcComp.width / 2, srcComp.height / 2],
         label: label,
-        record: { mode: mode, keys: [] }
+        record: { mode: mode, keys: [], fx: [] }
+    };
+    var warnings = [];
+    // each part is copied on its own, so a failure in one (e.g. an effect) doesn't stop the keyframes
+    var part = function (name, fn) {
+        try { fn(); } catch (e) { warnings.push(name + ": " + e.toString()); }
     };
 
     try { if (src.threeDLayer && !dst.threeDLayer) dst.threeDLayer = true; } catch (e1) {}
@@ -489,19 +499,46 @@ TL.copyLayerAnimation = function (src, dst, srcComp, mode, label) {
 
     if (TL.isTextLayer(src) && TL.isTextLayer(dst)) {
         var st = src.property("ADBE Text Properties");
-        TL.copyGroup(st.property("ADBE Text More Options"), dst, ["ADBE Text Properties", "ADBE Text More Options"], ctx, { record: true });
-        TL.copyGroup(st.property("ADBE Text Animators"), dst, ["ADBE Text Properties", "ADBE Text Animators"], ctx, {});
+        part("Text options", function () {
+            TL.copyGroup(st.property("ADBE Text More Options"), dst, ["ADBE Text Properties", "ADBE Text More Options"], ctx, { record: true });
+        });
+        part("Text animators", function () {
+            TL.copyGroup(st.property("ADBE Text Animators"), dst, ["ADBE Text Properties", "ADBE Text Animators"], ctx, {});
+        });
     }
-    TL.copyGroup(src.property("ADBE Mask Parade"), dst, ["ADBE Mask Parade"], ctx, {});
-    TL.copyGroup(src.property("ADBE Effect Parade"), dst, ["ADBE Effect Parade"], ctx, {});
-    TL.copyGroup(src.property("ADBE Transform Group"), dst, ["ADBE Transform Group"], ctx, { animatedOnly: true, relative: true, record: true });
+    part("Masks", function () { TL.copyGroup(src.property("ADBE Mask Parade"), dst, ["ADBE Mask Parade"], ctx, {}); });
+    // effects before transform: transform expressions often read effect sliders
+    part("Effects", function () { TL.copyGroup(src.property("ADBE Effect Parade"), dst, ["ADBE Effect Parade"], ctx, {}); });
+    part("Transform", function () {
+        TL.copyGroup(src.property("ADBE Transform Group"), dst, ["ADBE Transform Group"], ctx, { animatedOnly: true, relative: true, record: true });
+    });
 
-    // remember keyframes/expressions added to existing properties (tagged groups are found by name)
-    if (label && ctx.record.keys.length) {
+    // remember what was added to existing properties / effect stack, so Remove can undo it
+    if (label && (ctx.record.keys.length || ctx.record.fx.length)) {
         var data = TL.readMark(dst, "TLA") || {};
         if (!(data[label] instanceof Array)) data[label] = [];
         data[label].push(ctx.record);
         TL.writeMark(dst, "TLA", data);
+    }
+
+    TL.expressionErrors(dst, dst.name, warnings);
+    return warnings;
+};
+
+/* Collect expression errors on the layer (After Effects silently disables a broken expression). */
+TL.expressionErrors = function (group, prefix, out) {
+    for (var i = 1; i <= group.numProperties; i++) {
+        var p = group.property(i);
+        if (!p) continue;
+        if (p.propertyType === PropertyType.PROPERTY) {
+            try {
+                if (p.canSetExpression && p.expression !== "" && p.expressionError) {
+                    out.push(prefix + " > " + p.name + ": " + p.expressionError.split(/\r|\n/)[0]);
+                }
+            } catch (e) {}
+        } else {
+            TL.expressionErrors(p, prefix + " > " + p.name, out);
+        }
     }
 };
 
@@ -514,6 +551,7 @@ TL.removePreset = function (label) {
     if (!layers.length) return TL.err("Select the layers to remove \"" + label + "\" from.");
 
     var suffix = TL.tag(label);
+    // Effect Parade stays in the list for effects tagged by the previous panel version
     var parades = [["ADBE Text Properties", "ADBE Text Animators"], ["ADBE Effect Parade"], ["ADBE Mask Parade"]];
     var tol = comp.frameDuration / 2;
 
@@ -543,6 +581,15 @@ TL.removePreset = function (label) {
             if (recs instanceof Array) {
                 var restore = [];
                 for (var r = 0; r < recs.length; r++) {
+                    // effects added by this preset: remove the last matching one (same name + type) for each record
+                    var fx = recs[r].fx || [];
+                    for (k = fx.length - 1; k >= 0; k--) {
+                        var parade = layer.property("ADBE Effect Parade");
+                        for (j = parade.numProperties; j >= 1; j--) {
+                            var ef = layer.property("ADBE Effect Parade").property(j);
+                            if (ef && ef.matchName === fx[k].mn && ef.name === fx[k].n) { ef.remove(); removed++; break; }
+                        }
+                    }
                     var keys = recs[r].keys || [];
                     for (k = 0; k < keys.length; k++) {
                         var e = keys[k], prop = TL.resolve(layer, e.p);
@@ -600,13 +647,13 @@ TL.applySimple = function (aepPath, compName, mode, label) {
         if (!srcComp || srcComp.numLayers < 1) return TL.err("Preset composition not found.");
         var src = srcComp.layer(1);
 
-        var applied = 0, skipped = 0;
+        var applied = 0, skipped = 0, warnings = [];
         for (i = 0; i < targets.length; i++) {
             if (!TL.isTextLayer(targets[i])) { skipped++; continue; }
-            TL.copyLayerAnimation(src, targets[i], srcComp, mode === "out" ? "out" : "in", label || "");
+            warnings = warnings.concat(TL.copyLayerAnimation(src, targets[i], srcComp, mode === "out" ? "out" : "in", label || ""));
             applied++;
         }
-        return TL.ok({ applied: applied, skipped: skipped });
+        return TL.ok({ applied: applied, skipped: skipped, warnings: warnings });
     } catch (e) {
         return TL.errFromException(e);
     } finally {

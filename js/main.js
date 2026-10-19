@@ -146,6 +146,7 @@
     var span = document.createElement('span');
     if (kind) span.className = kind;
     span.textContent = msg;
+    el.title = msg; // long messages are cut off - hover shows the full text
     el.appendChild(span);
   }
 
@@ -613,7 +614,11 @@
         if (!r.applied) return status('None of the selected layers is a text layer.', 'error');
         var msg = '"' + p.name + '" (' + (mode === 'out' ? 'Out' : 'In') + ') applied to ' + r.applied + ' layer' + (r.applied === 1 ? '' : 's') + '.';
         if (r.skipped) msg += ' (' + r.skipped + ' non-text layer' + (r.skipped === 1 ? '' : 's') + ' skipped)';
-        status(msg, 'success');
+        if (r.warnings && r.warnings.length) {
+          status(msg + ' Problems: ' + r.warnings.join(' | '), 'warn');
+        } else {
+          status(msg, 'success');
+        }
       });
     }
   }
