@@ -342,7 +342,9 @@
     loadLibrary();
     render();
     status('Category "' + name + '" moved' + (zone === 'inside' ? ' into "' + catLabel(target) + '"' : '') + '.', 'success');
-    syncPush('Library: move category "' + src + '" -> "' + dest + '"');
+    syncPush(dest === src
+      ? 'Library: reorder categories in "' + (newParent || 'top level') + '"'
+      : 'Library: move category "' + src + '" -> "' + dest + '"');
   }
 
   var dragCat = null;
