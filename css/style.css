@@ -257,6 +257,27 @@ input::placeholder, textarea::placeholder { color: var(--dim); }
   flex: 0 0 auto;
 }
 .cat-icon svg { width: 13px; height: 13px; }
+
+/* folder tree */
+.cats li { gap: 6px; }
+.cats li .chev {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--dim);
+  flex: 0 0 auto;
+  transition: transform .15s;
+}
+.cats li .chev svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.cats li .chev:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
+.cats li .chev.open { transform: rotate(90deg); }
+.cats li .chev.none { visibility: hidden; }
+.cats li.sub { margin-bottom: 2px; padding-top: 5px; padding-bottom: 5px; }
+.cats li.sub .cat-icon { width: 22px; height: 22px; background: transparent; }
+.cats li.sub .label { font-size: 12px; }
 .cats li .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cats li .count {
   min-width: 22px;

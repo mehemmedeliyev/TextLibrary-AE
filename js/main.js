@@ -6,7 +6,7 @@
   var fs = nodeRequire('fs');
   var path = nodeRequire('path');
 
-  var CATEGORY_DEFAULTS = ['Simple Text', 'Complex Text'];
+  var CATEGORY_DEFAULTS = ['Text Animation/Simple', 'Text Animation/Complex'];
   var LS_LIB = 'tl.libPath';
 
   var state = {
@@ -181,18 +181,69 @@
 
   function setSyncing(on) { $('btnSync').classList.toggle('spinning', on); }
 
+  /*
+   * Categories are folders and can be nested ("Text Animation/Simple"). A folder with meta.json
+   * is a preset, any other folder is a category. Category ids are paths relative to the library.
+   */
+  function isPresetDir(dir) { return fs.existsSync(path.join(dir, 'meta.json')); }
+
+  function scanCategories(rel, depth, out) {
+    var dir = rel ? path.join(state.lib, rel) : state.lib;
+    var nodes = [];
+    fs.readdirSync(dir).filter(function (f) {
+      return f.charAt(0) !== '.' && isDir(path.join(dir, f)) && !isPresetDir(path.join(dir, f));
+    }).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (f) {
+      var id = rel ? rel + '/' + f : f;
+      var node = { id: id, name: f, depth: depth, children: [] };
+      out.push(id);
+      state.presets[id] = readCategory(id);
+      node.children = scanCategories(id, depth + 1, out);
+      nodes.push(node);
+    });
+    return nodes;
+  }
+
   function loadLibrary() {
     mkdirp(state.lib);
-    var dirs = fs.readdirSync(state.lib).filter(function (f) { return isDir(path.join(state.lib, f)); });
-    if (!dirs.length) {
-      CATEGORY_DEFAULTS.forEach(function (c) { mkdirp(path.join(state.lib, c)); });
-      dirs = CATEGORY_DEFAULTS.slice();
-    }
-    dirs.sort(function (a, b) { return a.localeCompare(b); });
-    state.cats = dirs;
     state.presets = {};
-    dirs.forEach(function (cat) { state.presets[cat] = readCategory(cat); });
+    var ids = [];
+    state.tree = scanCategories('', 0, ids);
+    if (!ids.length) {
+      CATEGORY_DEFAULTS.forEach(function (c) {
+        mkdirp(path.join(state.lib, c));
+        fs.writeFileSync(path.join(state.lib, c, '.keep'), '');
+      });
+      state.presets = {};
+      ids = [];
+      state.tree = scanCategories('', 0, ids);
+    }
+    state.cats = ids;
     if (state.cats.indexOf(state.currentCat) < 0) state.currentCat = state.cats[0] || null;
+    expandTo(state.currentCat);
+  }
+
+  // presets of a category and all categories inside it
+  function presetsUnder(id) {
+    var out = [];
+    state.cats.forEach(function (c) {
+      if (c === id || c.indexOf(id + '/') === 0) out = out.concat(state.presets[c]);
+    });
+    return out;
+  }
+
+  function catLabel(id) { return String(id).split('/').join(' / '); }
+
+  /* expanded folders are remembered between sessions */
+  var LS_EXPANDED = 'tl.expanded';
+  var expanded = {};
+  try { expanded = JSON.parse(localStorage.getItem(LS_EXPANDED) || '{}') || {}; } catch (e) { expanded = {}; }
+
+  function saveExpanded() { try { localStorage.setItem(LS_EXPANDED, JSON.stringify(expanded)); } catch (e) {} }
+
+  function expandTo(id) {
+    if (!id) return;
+    var parts = id.split('/');
+    for (var i = 1; i < parts.length; i++) expanded[parts.slice(0, i).join('/')] = true;
   }
 
   function readCategory(cat) {
@@ -261,30 +312,50 @@
   ];
   var CAT_ICON = '<svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.4 1.5h4.8A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>';
 
+  var CHEVRON = '<svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>';
+
+  // folder tree: top-level folders get a colour, sub-folders inherit it
   function renderCats() {
     var ul = $('cats');
     ul.innerHTML = '';
-    state.cats.forEach(function (cat, i) {
+    var add = function (node, color) {
       var li = document.createElement('li');
-      if (cat === state.currentCat && !state.query) li.className = 'active';
-      var color = CAT_COLORS[i % CAT_COLORS.length];
+      var hasKids = node.children.length > 0;
+      var open = !!expanded[node.id];
+      if (node.id === state.currentCat && !state.query) li.classList.add('active');
+      if (node.depth > 0) li.classList.add('sub');
+      li.style.paddingLeft = (6 + node.depth * 16) + 'px';
       li.style.setProperty('--cat', color[0]);
       li.style.setProperty('--cat-rgb', color[1]);
-      li.innerHTML = '<span class="cat-icon">' + CAT_ICON + '</span><span class="label"></span><span class="count"></span>';
-      li.querySelector('.label').textContent = cat;
-      li.querySelector('.count').textContent = state.presets[cat].length;
+      li.innerHTML =
+        '<span class="chev' + (hasKids ? '' : ' none') + (open ? ' open' : '') + '">' + (hasKids ? CHEVRON : '') + '</span>' +
+        '<span class="cat-icon">' + CAT_ICON + '</span><span class="label"></span><span class="count"></span>';
+      li.querySelector('.label').textContent = node.name;
+      li.querySelector('.label').title = catLabel(node.id);
+      li.querySelector('.count').textContent = presetsUnder(node.id).length;
+
+      li.querySelector('.chev').addEventListener('click', function (e) {
+        if (!hasKids) return;
+        e.stopPropagation();
+        expanded[node.id] = !open;
+        saveExpanded();
+        renderCats();
+      });
       li.addEventListener('click', function () {
-        state.currentCat = cat;
+        state.currentCat = node.id;
         state.query = '';
         $('search').value = '';
+        if (hasKids && !open) { expanded[node.id] = true; saveExpanded(); }
         render();
       });
       ul.appendChild(li);
-    });
+      if (open) node.children.forEach(function (c) { add(c, color); });
+    };
+    state.tree.forEach(function (node, i) { add(node, CAT_COLORS[i % CAT_COLORS.length]); });
   }
 
   function currentList() {
-    if (!state.query) return state.presets[state.currentCat] || [];
+    if (!state.query) return state.currentCat ? presetsUnder(state.currentCat) : [];
     var q = state.query.toLocaleLowerCase();
     var out = [];
     state.cats.forEach(function (cat) {
@@ -301,7 +372,7 @@
     grid.innerHTML = '';
     $('contentHead').textContent = state.query
       ? list.length + ' result' + (list.length === 1 ? '' : 's') + ' for "' + state.query + '"'
-      : (state.currentCat || '');
+      : (state.currentCat ? catLabel(state.currentCat) : '');
 
     $('empty').hidden = list.length > 0;
     if (!list.length) {
@@ -335,7 +406,8 @@
     badge.title = p.type === 'complex' ? 'Composition - added as a precomp' : 'Text animation - applied to the selected layers';
     card.querySelector('.name').textContent = p.name;
     card.querySelector('.name').title = p.name;
-    if (state.query) card.querySelector('.cat').textContent = p.cat;
+    // inside a parent folder or in search results, show which sub-folder a preset is from
+    if (state.query || p.cat !== state.currentCat) card.querySelector('.cat').textContent = p.cat.split('/').pop();
 
     card.addEventListener('mouseenter', function () { startPlayback(img, p); });
     card.addEventListener('mouseleave', function () { stopPlayback(); img.src = thumbUrl(p); });
@@ -748,12 +820,14 @@
     sel.innerHTML = '';
     state.cats.forEach(function (c) {
       var o = document.createElement('option');
-      o.value = o.textContent = c;
+      o.value = c;
+      o.textContent = catLabel(c);
       sel.appendChild(o);
     });
     if (state.currentCat) sel.value = state.currentCat;
-    if (state.currentCat === 'Complex Text') setSaveType('complex');
-    else if (state.currentCat === 'Simple Text') setSaveType('simple');
+    var cur = String(state.currentCat || '').toLowerCase();
+    if (/complex/.test(cur)) setSaveType('complex');
+    else if (/simple/.test(cur)) setSaveType('simple');
     else setSaveType(state.saveType);
     $('saveName').value = '';
     openModal('saveModal');
@@ -839,21 +913,40 @@
   /* Categories                                                          */
   /* ------------------------------------------------------------------ */
 
+  function openAddCat() {
+    var sel = $('catParent');
+    sel.innerHTML = '<option value="">(top level)</option>';
+    state.cats.forEach(function (c) {
+      var o = document.createElement('option');
+      o.value = c;
+      o.textContent = catLabel(c);
+      sel.appendChild(o);
+    });
+    sel.value = state.currentCat || '';
+    $('catName').value = '';
+    openModal('catModal');
+    $('catName').focus();
+  }
+
   function doAddCat() {
     var name = sanitize($('catName').value);
     if (!$('catName').value.trim()) { $('catName').focus(); return; }
-    var p = path.join(state.lib, name);
-    if (isDir(p)) { status('A category with this name already exists.', 'error'); return; }
+    var parent = $('catParent').value;
+    var id = parent ? parent + '/' + name : name;
+    var p = path.join(state.lib, id);
+    if (isDir(p)) { status('A category with this name already exists here.', 'error'); return; }
     mkdirp(p);
     fs.writeFileSync(path.join(p, '.keep'), ''); // git does not track empty folders
     closeModal('catModal');
-    state.currentCat = name;
+    state.currentCat = id;
     state.query = '';
     $('search').value = '';
+    expandTo(id);
+    saveExpanded();
     loadLibrary();
     render();
-    status('Category "' + name + '" created.', 'success');
-    syncPush('Library: add category "' + name + '"');
+    status('Category "' + catLabel(id) + '" created.', 'success');
+    syncPush('Library: add category "' + id + '"');
   }
 
   /* ------------------------------------------------------------------ */
@@ -1171,11 +1264,7 @@
     b.addEventListener('click', function () { setSaveType(b.getAttribute('data-type')); });
   });
 
-  $('btnAddCat').addEventListener('click', function () {
-    $('catName').value = '';
-    openModal('catModal');
-    $('catName').focus();
-  });
+  $('btnAddCat').addEventListener('click', openAddCat);
   $('btnDoAddCat').addEventListener('click', doAddCat);
   $('catName').addEventListener('keydown', function (e) { if (e.key === 'Enter') doAddCat(); });
 
