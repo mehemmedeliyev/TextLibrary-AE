@@ -1551,6 +1551,136 @@ TL.sequenceLayers = function (offsetFrames, step, reverse) {
     }
 };
 
+/* ---------- Move: offset transforms of the selected layers without adding keyframes ---------- */
+
+/*
+ * Apply fn to keyframe values or the static value - never adds a key.
+ * onlySel: change only the selected keyframes (a property without selected keys is left alone).
+ * Without onlySel every keyframe changes, so the whole animation shifts.
+ * Returns the number of changed values.
+ */
+TL.offsetProp = function (p, fn, onlySel) {
+    if (onlySel) {
+        var sk = p.selectedKeys || [];
+        for (var s = 0; s < sk.length; s++) p.setValueAtKey(sk[s], fn(p.keyValue(sk[s])));
+        return sk.length;
+    }
+    if (p.numKeys > 0) {
+        for (var k = 1; k <= p.numKeys; k++) p.setValueAtKey(k, fn(p.keyValue(k)));
+        return p.numKeys;
+    }
+    p.setValue(fn(p.value));
+    return 1;
+};
+
+/* Transform properties Move can touch (separated X/Y/Z position included). */
+TL.moveProps = function (tr) {
+    var names = ["ADBE Position", "ADBE Position_0", "ADBE Position_1", "ADBE Position_2", "ADBE Rotate Z", "ADBE Scale", "ADBE Opacity"];
+    var out = [];
+    for (var i = 0; i < names.length; i++) {
+        var p = tr.property(names[i]);
+        if (p) out.push(p);
+    }
+    return out;
+};
+
+TL.hasSelectedKeys = function (layer) {
+    var tr = layer.property("ADBE Transform Group");
+    if (!tr) return false;
+    var list = TL.moveProps(tr);
+    for (var i = 0; i < list.length; i++) {
+        try { if (list[i].selectedKeys && list[i].selectedKeys.length) return true; } catch (e) {}
+    }
+    return false;
+};
+
+/* Selected layers plus the layers whose keyframes / properties are selected. */
+TL.moveTargets = function (comp) {
+    var out = TL.selectedLayers(comp), seen = {}, i;
+    for (i = 0; i < out.length; i++) seen[out[i].index] = 1;
+    var props = comp.selectedProperties || [];
+    for (i = 0; i < props.length; i++) {
+        try {
+            var l = props[i].propertyGroup(props[i].propertyDepth);
+            if (l && !seen[l.index]) { seen[l.index] = 1; out.push(l); }
+        } catch (e) {}
+    }
+    return out;
+};
+
+/*
+ * kind: "pos" (a, b, c = dx, dy, dz px) | "rot" (a = degrees) | "scale" (a = percent points) | "opacity" (a = percent points)
+ * If any transform keyframe is selected, only the selected keyframes change; otherwise whole layers move.
+ * Z only moves 3D layers. Scale keeps the sign of flipped axes.
+ */
+TL.moveLayers = function (kind, a, b, c) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var layers = TL.moveTargets(comp);
+    if (!layers.length) return TL.err("Select layers or keyframes in the timeline.");
+    a = +a || 0; b = +b || 0; c = +c || 0;
+
+    var onlySel = false, i;
+    for (i = 0; i < layers.length && !onlySel; i++) onlySel = TL.hasSelectedKeys(layers[i]);
+
+    app.beginUndoGroup("Text Library: Move");
+    try {
+        var done = 0, keys = 0;
+        for (i = 0; i < layers.length; i++) {
+            var l = layers[i], tr = l.property("ADBE Transform Group"), n = 0;
+            if (!tr) continue;
+            TL.withUnlocked(l, function () {
+                var is3D = false;
+                try { is3D = !!l.threeDLayer || l instanceof CameraLayer || l instanceof LightLayer; } catch (e3) {}
+
+                if (kind === "pos") {
+                    var dz = is3D ? c : 0;
+                    if (!a && !b && !dz) return;
+                    var pos = tr.property("ADBE Position");
+                    if (pos.dimensionsSeparated) {
+                        var d = [a, b, dz];
+                        for (var j = 0; j < 3; j++) {
+                            var sp = tr.property("ADBE Position_" + j);
+                            if (!d[j] || !sp) continue;
+                            n += (function (dd) { return TL.offsetProp(sp, function (v) { return v + dd; }, onlySel); })(d[j]);
+                        }
+                    } else {
+                        n += TL.offsetProp(pos, function (v) {
+                            v = v.slice(0); v[0] += a; v[1] += b;
+                            if (v.length > 2) v[2] += dz;
+                            return v;
+                        }, onlySel);
+                    }
+                } else if (kind === "rot") {
+                    var rz = tr.property("ADBE Rotate Z");
+                    if (rz) n += TL.offsetProp(rz, function (v) { return v + a; }, onlySel);
+                } else if (kind === "scale") {
+                    var sc = tr.property("ADBE Scale");
+                    if (sc) n += TL.offsetProp(sc, function (v) {
+                        v = v.slice(0);
+                        for (var k = 0; k < v.length; k++) v[k] += v[k] < 0 ? -a : a;
+                        return v;
+                    }, onlySel);
+                } else if (kind === "opacity") {
+                    var op = tr.property("ADBE Opacity");
+                    if (op) n += TL.offsetProp(op, function (v) { return Math.max(0, Math.min(100, v + a)); }, onlySel);
+                }
+            });
+            if (n) { done++; keys += n; }
+        }
+        if (!done) {
+            if (kind === "pos" && !a && !b) return TL.err("Depth only moves 3D layers.");
+            if (onlySel) return TL.err("No selected keyframes on this property - select its keyframes, or deselect all keyframes to move whole layers.");
+            return TL.err("Nothing to move on the selected layers.");
+        }
+        return TL.ok({ done: done, keys: onlySel ? keys : 0, selection: onlySel });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
 /* ---------- Extract: pull the layers of a precomp out into the current comp ---------- */
 
 TL.extractPrecomp = function () {

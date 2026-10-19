@@ -663,6 +663,176 @@
     });
   });
 
+  /* Move: one step per click, repeats while the button is held. Only one call to After Effects
+     is in flight at a time - repeats that come in meanwhile are dropped, so holding never piles up. */
+  var MV_UNITS = { pos: 'px', rot: '°', scale: '%', opacity: '%' };
+  var mvBusy = false;
+
+  function moveStep(b, e) {
+    if (mvBusy) return;
+    var step = Math.abs(parseFloat($('mvStep').value)) || 1;
+    if (e.shiftKey) step *= 10;
+    if (e.altKey) step /= 10;
+    var kind = b.getAttribute('data-mv');
+    var v = b.getAttribute('data-v').split(',').map(function (x) { return +x * step; });
+    mvBusy = true;
+    host.apply(null, ['moveLayers', kind].concat(v)).then(function (r) {
+      mvBusy = false;
+      if (!r.ok) return status(r.error, 'error');
+      var amount = (+step.toFixed(2)) + MV_UNITS[kind];
+      status(r.selection
+        ? plural(r.keys, 'selected keyframe') + ' moved ' + amount + ' - other keyframes stay.'
+        : plural(r.done, 'layer') + ' moved ' + amount + ' - no keyframes added.', 'success');
+    });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-mv]'), function (b) {
+    var delay = 0, timer = 0, mods = null;
+    function stop() { clearTimeout(delay); clearInterval(timer); delay = timer = 0; }
+    b.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      mods = { shiftKey: e.shiftKey, altKey: e.altKey };
+      moveStep(b, mods);
+      stop();
+      delay = setTimeout(function () { timer = setInterval(function () { moveStep(b, mods); }, 90); }, 380);
+    });
+    b.addEventListener('mouseup', stop);
+    b.addEventListener('mouseleave', stop);
+  });
+
+  /* drag to reorder: grab an item and drag it - it lifts and follows the mouse, the other items
+     slide out of the way. A plain click still works, dragging starts only after the mouse moves.
+     The order is remembered between sessions. */
+  function makeSortable(box, itemSel, handleSel, idAttr, storeKey) {
+    var drag = null;
+
+    function items() { return Array.prototype.slice.call(box.querySelectorAll(itemSel)); }
+
+    function save() {
+      var ids = items().map(function (c) { return c.getAttribute(idAttr); });
+      try { localStorage.setItem(storeKey, JSON.stringify(ids)); } catch (e) {}
+    }
+
+    (function restore() {
+      var ids = [];
+      try { ids = JSON.parse(localStorage.getItem(storeKey) || '[]') || []; } catch (e) { ids = []; }
+      ids.forEach(function (id) {
+        var c = box.querySelector(itemSel + '[' + idAttr + '="' + id + '"]');
+        if (c) box.appendChild(c);
+      });
+    })();
+
+    // mouse position relative to the box's offset parent (same space as offsetLeft / offsetTop of the items)
+    function point(e) {
+      var par = items()[0].offsetParent, r = par.getBoundingClientRect();
+      return { x: e.clientX - r.left - par.clientLeft + par.scrollLeft, y: e.clientY - r.top - par.clientTop + par.scrollTop };
+    }
+
+    // move an item in the DOM and slide the others from where they were to their new place (FLIP)
+    function move(item, ref) {
+      var others = items().filter(function (c) { return c !== item; });
+      others.forEach(function (c) { c._from = c.getBoundingClientRect(); });
+      var oldX = item.offsetLeft, oldY = item.offsetTop;
+      box.insertBefore(item, ref);
+      // keep the dragged item visually where it is, its layout slot just changed
+      drag.x += oldX - item.offsetLeft;
+      drag.y += oldY - item.offsetTop;
+      others.forEach(function (c) {
+        c.style.transition = 'none';
+        c.style.transform = '';
+        var to = c.getBoundingClientRect(), dx = c._from.left - to.left, dy = c._from.top - to.top;
+        if (!dx && !dy) { c.style.transition = ''; return; }
+        c.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        void c.offsetWidth;
+        c.style.transition = '';
+        c.style.transform = '';
+      });
+    }
+
+    // find the slot under the mouse: left half of an item -> before it, right half -> after it
+    function reorderAt(p) {
+      var list = items();
+      for (var i = 0; i < list.length; i++) {
+        var c = list[i];
+        if (c === drag.item) continue;
+        if (p.x < c.offsetLeft || p.x > c.offsetLeft + c.offsetWidth || p.y < c.offsetTop || p.y > c.offsetTop + c.offsetHeight) continue;
+        var ref = p.x < c.offsetLeft + c.offsetWidth / 2 ? c : c.nextElementSibling;
+        if (ref !== drag.item && ref !== drag.item.nextElementSibling) move(drag.item, ref);
+        return;
+      }
+    }
+
+    // follow the mouse with a little lag, tilt by speed, scale up on pick-up
+    function tick() {
+      var tx = drag.p.x - drag.gx - drag.item.offsetLeft;
+      var ty = drag.p.y - drag.gy - drag.item.offsetTop;
+      drag.x += (tx - drag.x) * 0.35;
+      drag.y += (ty - drag.y) * 0.35;
+      drag.r += (Math.max(-7, Math.min(7, (tx - drag.x) * 0.12)) - drag.r) * 0.2;
+      drag.s += (1.05 - drag.s) * 0.25;
+      drag.item.style.transform = 'translate(' + drag.x.toFixed(2) + 'px,' + drag.y.toFixed(2) + 'px) rotate(' + drag.r.toFixed(2) + 'deg) scale(' + drag.s.toFixed(3) + ')';
+      drag.raf = requestAnimationFrame(tick);
+    }
+
+    // the click that ends a drag must not also press the button underneath
+    function swallowClick(e) { e.stopPropagation(); e.preventDefault(); }
+
+    function onMove(e) {
+      drag.p = point(e);
+      if (!drag.on) {
+        if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 5) return;
+        drag.on = true;
+        drag.item.classList.add('lifted');
+        box.classList.add('sorting');
+        document.body.classList.add('item-dragging');
+        drag.raf = requestAnimationFrame(tick);
+      }
+      reorderAt(drag.p);
+    }
+
+    function onUp() {
+      var d = drag;
+      drag = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!d.on) return;
+      cancelAnimationFrame(d.raf);
+      var item = d.item;
+      // let the item spring back into its slot
+      item.classList.remove('lifted');
+      item.classList.add('settling');
+      item.style.transform = '';
+      box.classList.remove('sorting');
+      document.body.classList.remove('item-dragging');
+      setTimeout(function () { item.classList.remove('settling'); }, 450);
+      document.addEventListener('click', swallowClick, true);
+      setTimeout(function () { document.removeEventListener('click', swallowClick, true); }, 0);
+      save();
+    }
+
+    items().forEach(function (item) {
+      item.classList.add('sort-item');
+      var handle = handleSel ? item.querySelector(handleSel) : item;
+      handle.addEventListener('mousedown', function (e) {
+        if (e.button !== 0 || drag) return;
+        e.preventDefault();
+        var p = point(e);
+        drag = {
+          item: item, on: false, p: p, sx: e.clientX, sy: e.clientY,
+          gx: p.x - item.offsetLeft, gy: p.y - item.offsetTop,
+          x: 0, y: 0, r: 0, s: 1, raf: 0
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  }
+
+  // cards are dragged by their header, new-layer tiles by the whole tile
+  makeSortable(document.querySelector('.motion-deck'), '.m-card', '.m-head', 'data-card', 'tl.motionOrder');
+  makeSortable(document.querySelector('.m-layers'), '.m-layer', null, 'data-new', 'tl.newLayerOrder');
+
   /* ------------------------------------------------------------------ */
   /* Duration popover                                                    */
   /* ------------------------------------------------------------------ */

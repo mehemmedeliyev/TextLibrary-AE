@@ -122,8 +122,8 @@
     <div class="motion-deck">
 
       <!-- anchor point -->
-      <section class="m-card">
-        <header class="m-head"><span>Anchor</span><em>selected layers</em></header>
+      <section class="m-card" data-card="anchor">
+        <header class="m-head" title="Drag to reorder"><span>Anchor</span><em>selected layers</em></header>
         <div class="anchor-pad" id="anchorPad">
           <span class="anchor-frame"></span>
           <button data-ax="0" data-ay="0" title="Top left"></button>
@@ -139,9 +139,54 @@
         <p class="m-note">Moves the anchor point - the layer stays in place.</p>
       </section>
 
+      <!-- move: offsets transforms - existing keyframes shift together, no new keyframes are added -->
+      <section class="m-card" data-card="move">
+        <header class="m-head" title="Drag to reorder"><span>Move</span><em>no new keyframes</em></header>
+        <div class="mv-body">
+          <div class="mv-pad">
+            <button class="mv-up" data-mv="pos" data-v="0,-1,0" title="Up"><svg viewBox="0 0 16 16"><path d="M8 13V3M4 7l4-4 4 4"/></svg></button>
+            <button class="mv-left" data-mv="pos" data-v="-1,0,0" title="Left"><svg viewBox="0 0 16 16"><path d="M13 8H3M7 4L3 8l4 4"/></svg></button>
+            <span class="mv-dot"></span>
+            <button class="mv-right" data-mv="pos" data-v="1,0,0" title="Right"><svg viewBox="0 0 16 16"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+            <button class="mv-down" data-mv="pos" data-v="0,1,0" title="Down"><svg viewBox="0 0 16 16"><path d="M8 3v10M4 9l4 4 4-4"/></svg></button>
+          </div>
+          <div class="mv-rows">
+            <div class="mv-row" title="Z position - 3D layers only">
+              <span>Depth</span>
+              <button data-mv="pos" data-v="0,0,-1" title="Forward (towards the camera)">Fwd</button>
+              <button data-mv="pos" data-v="0,0,1" title="Back (away from the camera)">Back</button>
+            </div>
+            <div class="mv-row">
+              <span>Rotate</span>
+              <button data-mv="rot" data-v="-1" title="Counter-clockwise"><svg viewBox="0 0 16 16"><path d="M3.5 6.5A5 5 0 1 1 3 9"/><path d="M3 3v3.5h3.5"/></svg></button>
+              <button data-mv="rot" data-v="1" title="Clockwise"><svg viewBox="0 0 16 16"><path d="M12.5 6.5A5 5 0 1 0 13 9"/><path d="M13 3v3.5H9.5"/></svg></button>
+            </div>
+            <div class="mv-row">
+              <span>Scale</span>
+              <button data-mv="scale" data-v="-1" title="Smaller">&minus;</button>
+              <button data-mv="scale" data-v="1" title="Bigger">+</button>
+            </div>
+            <div class="mv-row">
+              <span>Opacity</span>
+              <button data-mv="opacity" data-v="-1" title="More transparent">&minus;</button>
+              <button data-mv="opacity" data-v="1" title="More opaque">+</button>
+            </div>
+          </div>
+        </div>
+        <div class="mv-foot">
+          <label class="m-num" title="Pixels / degrees / percent per click">
+            <span>Step</span>
+            <button data-num="mvStep" data-d="-1">&minus;</button>
+            <input type="number" id="mvStep" value="10" min="1" step="1">
+            <button data-num="mvStep" data-d="1">+</button>
+          </label>
+          <small title="With keyframes selected only those keyframes change; with none selected the whole layer moves">Selected keys only, else whole layer · Hold to repeat · Shift ×10 · Alt ×0.1</small>
+        </div>
+      </section>
+
       <!-- expressions -->
-      <section class="m-card">
-        <header class="m-head"><span>Physics</span><em>keyframed properties</em></header>
+      <section class="m-card" data-card="physics">
+        <header class="m-head" title="Drag to reorder"><span>Physics</span><em>keyframed properties</em></header>
         <div class="m-tiles">
           <button class="m-tile" id="mElastic" title="Overshoot and settle after the last keyframe">
             <svg viewBox="0 0 48 24"><path d="M2 20 C10 20 12 4 18 4 S24 16 28 12 S33 7 36 9 S41 11 46 10"/></svg>
@@ -156,8 +201,8 @@
       </section>
 
       <!-- sequence -->
-      <section class="m-card">
-        <header class="m-head"><span>Sequence</span><em>stagger in time</em></header>
+      <section class="m-card" data-card="sequence">
+        <header class="m-head" title="Drag to reorder"><span>Sequence</span><em>stagger in time</em></header>
         <div class="seq-row">
           <div class="seg seq-dir" id="seqDir">
             <button data-rev="0" class="active" title="Top layer first">
@@ -184,8 +229,8 @@
       </section>
 
       <!-- layer tools -->
-      <section class="m-card">
-        <header class="m-head"><span>Layers</span><em>tools</em></header>
+      <section class="m-card" data-card="layers">
+        <header class="m-head" title="Drag to reorder"><span>Layers</span><em>tools</em></header>
         <div class="m-list">
           <button class="m-row featured" id="btnDeepCopy" title="Fully independent copy of the selected precomp (including all nested precomps)">
             <span class="m-ico"><svg viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg></span>
@@ -195,20 +240,24 @@
       </section>
 
       <!-- new layers (moved here from the top bar) -->
-      <section class="m-card">
-        <header class="m-head"><span>New layer</span><em>active comp</em></header>
-        <div class="m-chips">
-          <button class="m-chip" data-new="text">
-            <svg viewBox="0 0 16 16"><path d="M3 4V3h10v1M8 3v10M6 13h4"/></svg>Text
+      <section class="m-card" data-card="newlayer">
+        <header class="m-head" title="Drag to reorder"><span>New layer</span><em>active comp</em></header>
+        <div class="m-layers">
+          <button class="m-layer" data-new="text" style="--c: 110, 168, 255" title="New text layer">
+            <span class="m-badge"><svg viewBox="0 0 16 16"><path d="M3 4V3h10v1M8 3v10M6 13h4"/></svg></span>
+            <span class="m-txt"><b>Text</b><small>Type layer</small></span>
           </button>
-          <button class="m-chip" data-new="null">
-            <svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>Null
+          <button class="m-layer" data-new="null" style="--c: 232, 194, 90" title="New null object">
+            <span class="m-badge"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg></span>
+            <span class="m-txt"><b>Null</b><small>Controller</small></span>
           </button>
-          <button class="m-chip" data-new="adjustment">
-            <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" style="fill: currentColor; stroke: none"/></svg>Adjustment
+          <button class="m-layer" data-new="adjustment" style="--c: 177, 140, 255" title="New adjustment layer">
+            <span class="m-badge"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" style="fill: currentColor; stroke: none"/></svg></span>
+            <span class="m-txt"><b>Adjustment</b><small>Effects layer</small></span>
           </button>
-          <button class="m-chip" data-new="shape">
-            <svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 9.5h-11z"/></svg>Shape
+          <button class="m-layer" data-new="shape" style="--c: 79, 209, 165" title="New shape layer">
+            <span class="m-badge"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 9.5h-11z"/></svg></span>
+            <span class="m-txt"><b>Shape</b><small>Vector layer</small></span>
           </button>
         </div>
       </section>
