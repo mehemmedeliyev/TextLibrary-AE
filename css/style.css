@@ -719,36 +719,50 @@ body.scrubbing, body.scrubbing * { cursor: ew-resize !important; }
 }
 .m-note { margin: 0; color: var(--dim); font-size: 11px; line-height: 1.4; }
 
-/* anchor pad: a box outline with 9 points */
+/* anchor pad: a box outline with 9 points. Each cell is one big hit area (the whole 36px square),
+   the visible dot is drawn inside it, so the mouse doesn't have to land exactly on the dot. */
 .anchor-pad {
   position: relative;
-  width: 132px;
-  height: 132px;
+  width: 108px;
+  height: 108px;
   margin: 2px auto;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
-  place-items: center;
+  grid-template-columns: repeat(3, 36px);
+  grid-template-rows: repeat(3, 36px);
 }
 .anchor-frame {
   position: absolute;
-  top: 22px; left: 22px; right: 22px; bottom: 22px;
+  top: 18px; left: 18px; right: 18px; bottom: 18px;
   border: 1px dashed #3a3a42;
   border-radius: 4px;
   pointer-events: none;
 }
 .anchor-pad button {
   position: relative;
-  width: 14px;
-  height: 14px;
+  width: 36px;
+  height: 36px;
   padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: none;
+}
+.anchor-pad button::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
   border-radius: 50%;
   background: #0e0e10;
-  border: 1.5px solid #4a4a54;
+  border: 2px solid #4a4a54;
+  box-sizing: border-box;
+  transition: transform .12s, background .12s, border-color .12s;
 }
-.anchor-pad button.center { width: 16px; height: 16px; }
-.anchor-pad button:hover { border-color: var(--accent); background: rgba(var(--accent-rgb), .15); transform: scale(1.15); }
-.anchor-pad button.active { background: var(--accent); border-color: var(--accent); }
+.anchor-pad button:hover { background: rgba(var(--accent-rgb), .08); }
+.anchor-pad button:hover::before { border-color: var(--accent); background: rgba(var(--accent-rgb), .2); transform: scale(1.2); }
+.anchor-pad button.active::before { background: var(--accent); border-color: var(--accent); }
 
 /* physics tiles */
 .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

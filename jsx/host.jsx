@@ -1384,10 +1384,19 @@ TL.setAnchor = function (fx, fy) {
 
 /* ---------- Elastic / Bounce expressions ---------- */
 
+/* Slider controls added to the layer - the expressions read them, so the motion can be tuned in Effect Controls. */
+TL.MOTION_SLIDERS = {
+    elastic: [["Elastic Amplitude", 6], ["Elastic Frequency", 3], ["Elastic Decay", 6]],
+    bounce: [["Bounce Elasticity", 55], ["Bounce Gravity", 5000], ["Bounce Max Bounces", 6]]
+};
+
 TL.EXPR = {
     elastic: [
-        "// Text Library - Elastic (amp: overshoot size, freq: wobbles per second, decay: how fast it settles)",
-        "var amp = 0.06, freq = 3, decay = 6;",
+        "// Text Library - Elastic",
+        "// Tune it in Effect Controls: Elastic Amplitude / Frequency / Decay",
+        "var amp = effect(\"Elastic Amplitude\")(1) / 100;",
+        "var freq = effect(\"Elastic Frequency\")(1);",
+        "var decay = effect(\"Elastic Decay\")(1);",
         "var out = value;",
         "if (numKeys > 1) {",
         "  var k = nearestKey(time).index;",
@@ -1401,8 +1410,11 @@ TL.EXPR = {
         "out;"
     ].join("\n"),
     bounce: [
-        "// Text Library - Bounce (e: energy kept per bounce, g: gravity, nMax: max bounces)",
-        "var e = 0.55, g = 5000, nMax = 6;",
+        "// Text Library - Bounce",
+        "// Tune it in Effect Controls: Bounce Elasticity / Gravity / Max Bounces",
+        "var e = effect(\"Bounce Elasticity\")(1) / 100;",
+        "var g = Math.max(1, effect(\"Bounce Gravity\")(1));",
+        "var nMax = Math.round(effect(\"Bounce Max Bounces\")(1));",
         "var out = value;",
         "if (numKeys > 1) {",
         "  var k = nearestKey(time).index;",
@@ -1448,13 +1460,38 @@ TL.addMotionExpression = function (kind) {
     }
     if (!targets.length) return TL.err("Select a property (or layer) with at least 2 keyframes.");
 
+    // Adding effects invalidates property references, so remember each target as layer + index path first.
+    var refs = [];
+    for (i = 0; i < targets.length; i++) {
+        var path = [], q = targets[i];
+        while (q.propertyDepth > 0) { path.unshift(q.propertyIndex); q = q.parentProperty; }
+        refs.push({ layer: q, path: path });
+    }
+
     app.beginUndoGroup("Text Library: " + kind);
     try {
-        for (i = 0; i < targets.length; i++) {
-            targets[i].expression = expr;
-            targets[i].expressionEnabled = true;
+        var sliders = TL.MOTION_SLIDERS[kind], done = {};
+        for (i = 0; i < refs.length; i++) {
+            var layer = refs[i].layer;
+            if (done[layer.index]) continue;
+            done[layer.index] = true;
+            for (var s = 0; s < sliders.length; s++) {
+                var fxGroup = layer.property("ADBE Effect Parade");
+                if (fxGroup.property(sliders[s][0])) continue; // already there - keep the user's values
+                var fx = fxGroup.addProperty("ADBE Slider Control");
+                fx.name = sliders[s][0];
+                fx.property(1).setValue(sliders[s][1]);
+            }
         }
-        return TL.ok({ count: targets.length });
+        var count = 0;
+        for (i = 0; i < refs.length; i++) {
+            var prop = TL.resolve(refs[i].layer, refs[i].path);
+            if (!prop) continue;
+            prop.expression = expr;
+            prop.expressionEnabled = true;
+            count++;
+        }
+        return TL.ok({ count: count });
     } catch (e) {
         return TL.errFromException(e);
     } finally {
@@ -1464,7 +1501,10 @@ TL.addMotionExpression = function (kind) {
 
 /* ---------- Sequence: stagger layers in time ---------- */
 
-/* offsetFrames: frames between steps; step: how many layers share a step; reverse: bottom layer first */
+/*
+ * offsetFrames: frames between steps; step: how many layers share a step; reverse: bottom layer first.
+ * Each call pushes the layers further (cumulative): click twice with offset 2 -> 0, 4, 8 ... frames.
+ */
 TL.sequenceLayers = function (offsetFrames, step, reverse) {
     var comp = TL.activeComp();
     if (!comp) return TL.err("No active composition.");
@@ -1475,12 +1515,10 @@ TL.sequenceLayers = function (offsetFrames, step, reverse) {
 
     app.beginUndoGroup("Text Library: Sequence Layers");
     try {
-        var base = layers[0].inPoint, i;
-        for (i = 1; i < layers.length; i++) base = Math.min(base, layers[i].inPoint);
-        for (i = 0; i < layers.length; i++) {
-            (function (l, target) {
-                TL.withUnlocked(l, function () { l.startTime += target - l.inPoint; });
-            })(layers[i], base + Math.floor(i / step) * offsetFrames * comp.frameDuration);
+        for (var i = 0; i < layers.length; i++) {
+            (function (l, shift) {
+                if (shift) TL.withUnlocked(l, function () { l.startTime += shift; });
+            })(layers[i], Math.floor(i / step) * offsetFrames * comp.frameDuration);
         }
         return TL.ok({ count: layers.length });
     } catch (e) {
