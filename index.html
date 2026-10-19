@@ -16,6 +16,10 @@
         <svg viewBox="0 0 16 16"><path d="M2 13c4 0 3.5-10 12-10"/><circle cx="2" cy="13" r="1.2"/><circle cx="14" cy="3" r="1.2"/></svg>
         Flow
       </button>
+      <button class="tab" data-tab="motion">
+        <svg viewBox="0 0 16 16"><circle cx="4" cy="11" r="2"/><path d="M6 10c2-1 2.5-6 4.5-6S13 6 14 6.5"/></svg>
+        Motion
+      </button>
       <button class="tab" data-tab="edit">
         <svg viewBox="0 0 16 16"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></svg>
         Edit
@@ -24,11 +28,6 @@
     <button class="pill-btn" id="btnDeepCopy" title="Create a fully independent copy of the selected precomp (including all nested precomps)">
       <svg viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg>
       Deep Copy
-    </button>
-    <button class="pill-btn" id="btnNew" title="Add a new layer to the active composition">
-      <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>
-      Add
-      <svg class="chev" viewBox="0 0 16 16"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg>
     </button>
     <div class="spacer"></div>
     <button class="round-btn" id="btnRefresh" title="Refresh library">
@@ -116,6 +115,114 @@
         </div>
       </div>
       <div id="editList" class="edit-list"></div>
+    </div>
+  </main>
+
+  <!-- MOTION -->
+  <main class="view" id="view-motion" hidden>
+    <div class="motion-deck">
+
+      <!-- anchor point -->
+      <section class="m-card">
+        <header class="m-head"><span>Anchor</span><em>selected layers</em></header>
+        <div class="anchor-pad" id="anchorPad">
+          <span class="anchor-frame"></span>
+          <button data-ax="0" data-ay="0" title="Top left"></button>
+          <button data-ax="0.5" data-ay="0" title="Top"></button>
+          <button data-ax="1" data-ay="0" title="Top right"></button>
+          <button data-ax="0" data-ay="0.5" title="Left"></button>
+          <button data-ax="0.5" data-ay="0.5" class="center" title="Center"></button>
+          <button data-ax="1" data-ay="0.5" title="Right"></button>
+          <button data-ax="0" data-ay="1" title="Bottom left"></button>
+          <button data-ax="0.5" data-ay="1" title="Bottom"></button>
+          <button data-ax="1" data-ay="1" title="Bottom right"></button>
+        </div>
+        <p class="m-note">Moves the anchor point - the layer stays in place.</p>
+      </section>
+
+      <!-- expressions -->
+      <section class="m-card">
+        <header class="m-head"><span>Physics</span><em>keyframed properties</em></header>
+        <div class="m-tiles">
+          <button class="m-tile" id="mElastic" title="Overshoot and settle after the last keyframe">
+            <svg viewBox="0 0 48 24"><path d="M2 20 C10 20 12 4 18 4 S24 16 28 12 S33 7 36 9 S41 11 46 10"/></svg>
+            <b>Elastic</b>
+          </button>
+          <button class="m-tile" id="mBounce" title="Bounce back after the last keyframe">
+            <svg viewBox="0 0 48 24"><path d="M2 4 Q8 4 12 21 Q17 8 22 21 Q26 13 30 21 Q33 17 36 21 Q38 19 40 21 L46 21"/></svg>
+            <b>Bounce</b>
+          </button>
+        </div>
+        <p class="m-note">Select a property with 2+ keyframes, or a layer to use all its keyframed transforms.</p>
+      </section>
+
+      <!-- sequence -->
+      <section class="m-card">
+        <header class="m-head"><span>Sequence</span><em>stagger in time</em></header>
+        <div class="seq-row">
+          <div class="seg seq-dir" id="seqDir">
+            <button data-rev="0" class="active" title="Top layer first">
+              <svg viewBox="0 0 16 16"><path d="M2 3.5h5M5 7.5h5M8 11.5h6"/></svg>
+            </button>
+            <button data-rev="1" title="Bottom layer first">
+              <svg viewBox="0 0 16 16"><path d="M9 3.5h5M6 7.5h5M2 11.5h6"/></svg>
+            </button>
+          </div>
+          <label class="m-num" title="Frames between steps">
+            <span>Offset</span>
+            <button data-num="seqOffset" data-d="-1">&minus;</button>
+            <input type="number" id="seqOffset" value="2" step="1">
+            <button data-num="seqOffset" data-d="1">+</button>
+          </label>
+          <label class="m-num" title="Layers per step">
+            <span>Step</span>
+            <button data-num="seqStep" data-d="-1">&minus;</button>
+            <input type="number" id="seqStep" value="1" min="1" step="1">
+            <button data-num="seqStep" data-d="1">+</button>
+          </label>
+        </div>
+        <button class="cta m-wide" id="mSequence">Sequence layers</button>
+      </section>
+
+      <!-- layer tools -->
+      <section class="m-card">
+        <header class="m-head"><span>Layers</span><em>tools</em></header>
+        <div class="m-list">
+          <button class="m-row" id="mExtract" title="Move the layers of the selected precomp into this composition">
+            <svg viewBox="0 0 16 16"><rect x="2" y="5" width="9" height="9" rx="2"/><path d="M8 2h6v6M14 2L8.5 7.5"/></svg>
+            <span>Extract precomp</span>
+          </button>
+          <button class="m-row" id="mMerge" title="Combine the selected shape layers into one">
+            <svg viewBox="0 0 16 16"><rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="7" y="7" width="7" height="7" rx="1.5"/></svg>
+            <span>Merge shapes</span>
+          </button>
+          <button class="m-row" id="mNull" title="Null at the centre of the selection, selected layers parented to it">
+            <svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.5"/><path d="M8 5.5v5M5.5 8h5"/></svg>
+            <span>Add null</span>
+          </button>
+          <button class="m-row" id="mShape" title="Text or Illustrator layers to shape layers">
+            <svg viewBox="0 0 16 16"><path d="M2.5 4V2.5h6V4M5.5 2.5V10"/><path d="M10 9l3.5 5h-7z"/></svg>
+            <span>Convert to shape</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- new layers (moved here from the top bar) -->
+      <section class="m-card">
+        <header class="m-head"><span>New layer</span><em>active comp</em></header>
+        <div class="m-chips">
+          <button class="m-chip" data-new="text">
+            <svg viewBox="0 0 16 16"><path d="M3 4V3h10v1M8 3v10M6 13h4"/></svg>Text
+          </button>
+          <button class="m-chip" data-new="adjustment">
+            <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" style="fill: currentColor; stroke: none"/></svg>Adjustment
+          </button>
+          <button class="m-chip" data-new="shape">
+            <svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 9.5h-11z"/></svg>Shape
+          </button>
+        </div>
+      </section>
+
     </div>
   </main>
 
@@ -259,14 +366,6 @@
   <div class="menu" id="cardMenu" hidden>
     <button data-action="reveal">Show in folder</button>
     <button data-action="delete" class="danger-text">Delete</button>
-  </div>
-
-  <!-- NEW LAYER MENU -->
-  <div class="menu" id="newMenu" hidden>
-    <button data-type="text">Text</button>
-    <button data-type="null">Null</button>
-    <button data-type="adjustment">Adjustment Layer</button>
-    <button data-type="shape">Shape Layer</button>
   </div>
 
   <!-- BUSY OVERLAY -->

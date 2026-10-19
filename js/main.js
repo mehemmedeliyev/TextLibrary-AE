@@ -292,44 +292,93 @@
 
   function closeCardMenu() {
     $('cardMenu').hidden = true;
-    $('newMenu').hidden = true;
   }
 
   document.addEventListener('click', function (e) {
     if (!$('cardMenu').hidden && !$('cardMenu').contains(e.target)) $('cardMenu').hidden = true;
-    if (!$('newMenu').hidden && !$('newMenu').contains(e.target)) $('newMenu').hidden = true;
   });
 
   /* ------------------------------------------------------------------ */
-  /* New layer menu                                                      */
+  /* Motion tab                                                          */
   /* ------------------------------------------------------------------ */
 
-  // Opens on hover; a short delay lets the mouse travel from the button into the menu
-  var addMenuTimer = null;
+  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
 
-  function openAddMenu() {
-    clearTimeout(addMenuTimer);
-    var menu = $('newMenu');
-    if (!menu.hidden) return;
-    $('cardMenu').hidden = true;
-    menu.hidden = false;
-    var r = $('btnNew').getBoundingClientRect();
-    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
-    menu.style.top = (r.bottom + 4) + 'px';
+  // run a host call and report the result in the status bar
+  function motion(fn, args, done) {
+    host.apply(null, [fn].concat(args || [])).then(function (r) {
+      if (!r.ok) return status(r.error, 'error');
+      status(done(r), 'success');
+    });
   }
 
-  function closeAddMenuSoon() {
-    clearTimeout(addMenuTimer);
-    addMenuTimer = setTimeout(function () { $('newMenu').hidden = true; }, 220);
-  }
+  Array.prototype.forEach.call($('anchorPad').querySelectorAll('button'), function (b) {
+    b.addEventListener('click', function () {
+      var pad = $('anchorPad');
+      Array.prototype.forEach.call(pad.querySelectorAll('button'), function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+      motion('setAnchor', [+b.getAttribute('data-ax'), +b.getAttribute('data-ay')], function (r) {
+        return 'Anchor moved on ' + plural(r.done, 'layer') + (r.skipped ? ' (' + r.skipped + ' skipped)' : '') + '.';
+      });
+    });
+  });
 
-  $('btnNew').addEventListener('mouseenter', openAddMenu);
-  $('btnNew').addEventListener('mouseleave', closeAddMenuSoon);
-  $('newMenu').addEventListener('mouseenter', function () { clearTimeout(addMenuTimer); });
-  $('newMenu').addEventListener('mouseleave', closeAddMenuSoon);
-  $('btnNew').addEventListener('click', function (e) {
-    e.stopPropagation();
-    openAddMenu();
+  function propCount(n) { return n + (n === 1 ? ' property' : ' properties'); }
+
+  $('mElastic').addEventListener('click', function () {
+    motion('addMotionExpression', ['elastic'], function (r) { return 'Elastic added to ' + propCount(r.count) + '.'; });
+  });
+  $('mBounce').addEventListener('click', function () {
+    motion('addMotionExpression', ['bounce'], function (r) { return 'Bounce added to ' + propCount(r.count) + '.'; });
+  });
+
+  var seqReverse = false;
+  Array.prototype.forEach.call($('seqDir').children, function (b) {
+    b.addEventListener('click', function () {
+      seqReverse = b.getAttribute('data-rev') === '1';
+      Array.prototype.forEach.call($('seqDir').children, function (x) { x.classList.toggle('active', x === b); });
+    });
+  });
+
+  // -/+ buttons next to the number fields
+  Array.prototype.forEach.call(document.querySelectorAll('[data-num]'), function (b) {
+    b.addEventListener('click', function (e) {
+      e.preventDefault();
+      var input = $(b.getAttribute('data-num'));
+      var min = input.min !== '' ? +input.min : -9999;
+      input.value = Math.max(min, (parseInt(input.value, 10) || 0) + (+b.getAttribute('data-d')));
+    });
+  });
+
+  $('mSequence').addEventListener('click', function () {
+    var offset = parseInt($('seqOffset').value, 10) || 0;
+    var step = Math.max(1, parseInt($('seqStep').value, 10) || 1);
+    motion('sequenceLayers', [offset, step, seqReverse], function (r) {
+      return plural(r.count, 'layer') + ' sequenced (' + offset + ' f, every ' + plural(step, 'layer') + ').';
+    });
+  });
+
+  $('mExtract').addEventListener('click', function () {
+    motion('extractPrecomp', [], function (r) { return plural(r.count, 'layer') + ' extracted from the precomp.'; });
+  });
+  $('mMerge').addEventListener('click', function () {
+    motion('mergeShapes', [], function (r) {
+      return plural(r.count, 'shape layer') + ' merged.' + (r.parented ? ' Note: parenting of ' + r.parented + ' layer(s) was not kept.' : '');
+    });
+  });
+  $('mNull').addEventListener('click', function () {
+    motion('addNullParent', [], function (r) {
+      return '"' + r.name + '" created' + (r.count ? ' and ' + plural(r.count, 'layer') + ' parented to it.' : '.');
+    });
+  });
+  $('mShape').addEventListener('click', function () {
+    motion('convertToShape', [], function (r) { return plural(r.count, 'layer') + ' converted to shapes.'; });
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-new]'), function (b) {
+    b.addEventListener('click', function () {
+      motion('newLayer', [b.getAttribute('data-new')], function (r) { return '"' + r.name + '" created.'; });
+    });
   });
 
   /* ------------------------------------------------------------------ */
@@ -478,16 +527,6 @@
       durSet(r.duration);
     });
   }
-
-  Array.prototype.forEach.call($('newMenu').querySelectorAll('button'), function (b) {
-    b.addEventListener('click', function () {
-      $('newMenu').hidden = true;
-      host('newLayer', b.getAttribute('data-type')).then(function (r) {
-        if (!r.ok) return status(r.error, 'error');
-        status('"' + r.name + '" created.', 'success');
-      });
-    });
-  });
 
   Array.prototype.forEach.call($('cardMenu').querySelectorAll('button'), function (b) {
     b.addEventListener('click', function () {
@@ -1031,6 +1070,7 @@
     $('view-browse').hidden = tab !== 'browse';
     $('view-edit').hidden = tab !== 'edit';
     $('view-flow').hidden = tab !== 'flow';
+    $('view-motion').hidden = tab !== 'motion';
     watchSelection(tab === 'edit');
     if (window.TLFlow) window.TLFlow.setVisible(tab === 'flow');
   }

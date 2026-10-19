@@ -1323,6 +1323,397 @@ TL.applyEase = function (x1, y1, x2, y2) {
     }
 };
 
+/* ================================================================== */
+/* MOTION TOOLS                                                         */
+/* ================================================================== */
+
+TL.selectedLayers = function (comp) {
+    var sel = comp.selectedLayers, out = [];
+    for (var i = 0; i < sel.length; i++) out.push(sel[i]);
+    out.sort(function (a, b) { return a.index - b.index; });
+    return out;
+};
+
+/* ---------- Anchor point: move to a corner / edge / centre of the content, layer stays in place ---------- */
+
+TL.setAnchor = function (fx, fy) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var layers = TL.selectedLayers(comp);
+    if (!layers.length) return TL.err("Select layers in the timeline.");
+
+    app.beginUndoGroup("Text Library: Anchor Point");
+    try {
+        var done = 0, skipped = 0;
+        for (var i = 0; i < layers.length; i++) {
+            var l = layers[i];
+            var tr = l.property("ADBE Transform Group");
+            var ap = tr ? tr.property("ADBE Anchor Point") : null;
+            if (!ap || !l.sourceRectAtTime || ap.numKeys > 0) { skipped++; continue; } // camera/light or animated anchor
+            var r;
+            try { r = l.sourceRectAtTime(comp.time, false); } catch (eR) { skipped++; continue; }
+            if (!r || (r.width === 0 && r.height === 0)) { skipped++; continue; }
+
+            var oldA = ap.value;
+            var nx = r.left + fx * r.width, ny = r.top + fy * r.height;
+            var dX = nx - oldA[0], dY = ny - oldA[1];
+
+            // the same offset in parent space (scale, then rotation), so the content doesn't move
+            var sc = tr.property("ADBE Scale").value;
+            var rot = tr.property("ADBE Rotate Z").value * Math.PI / 180;
+            var sx = dX * sc[0] / 100, sy = dY * sc[1] / 100;
+            var px = sx * Math.cos(rot) - sy * Math.sin(rot);
+            var py = sx * Math.sin(rot) + sy * Math.cos(rot);
+
+            TL.withUnlocked(l, function () {
+                var a = oldA.slice(0);
+                a[0] = nx; a[1] = ny;
+                ap.setValue(a);
+                TL.shiftPos(l, px, py);
+            });
+            done++;
+        }
+        if (!done) return TL.err("Anchor could not be moved (animated anchor, camera/light or empty layer).");
+        return TL.ok({ done: done, skipped: skipped });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ---------- Elastic / Bounce expressions ---------- */
+
+TL.EXPR = {
+    elastic: [
+        "// Text Library - Elastic (amp: overshoot size, freq: wobbles per second, decay: how fast it settles)",
+        "var amp = 0.06, freq = 3, decay = 6;",
+        "var out = value;",
+        "if (numKeys > 1) {",
+        "  var k = nearestKey(time).index;",
+        "  if (key(k).time > time) k--;",
+        "  if (k > 0 && time > key(k).time) {",
+        "    var t = time - key(k).time;",
+        "    var v = velocityAtTime(key(k).time - thisComp.frameDuration / 10);",
+        "    out = value + v * amp * Math.sin(freq * t * 2 * Math.PI) / Math.exp(decay * t);",
+        "  }",
+        "}",
+        "out;"
+    ].join("\n"),
+    bounce: [
+        "// Text Library - Bounce (e: energy kept per bounce, g: gravity, nMax: max bounces)",
+        "var e = 0.55, g = 5000, nMax = 6;",
+        "var out = value;",
+        "if (numKeys > 1) {",
+        "  var k = nearestKey(time).index;",
+        "  if (key(k).time > time) k--;",
+        "  if (k > 0 && time > key(k).time) {",
+        "    var v = -velocityAtTime(key(k).time - 0.001) * e;",
+        "    var vl = (v instanceof Array) ? length(v) : Math.abs(v);",
+        "    if (vl > 0) {",
+        "      var u = (v instanceof Array) ? normalize(v) : (v < 0 ? -1 : 1);",
+        "      var t = time - key(k).time, segDur = 2 * vl / g, tCur = 0, tNext = segDur, n = 1;",
+        "      while (tNext < t && n <= nMax) { vl *= e; segDur *= e; tCur = tNext; tNext += segDur; n++; }",
+        "      if (n <= nMax) { var d = t - tCur; out = value + u * d * (vl - g * d / 2); }",
+        "    }",
+        "  }",
+        "}",
+        "out;"
+    ].join("\n")
+};
+
+/* Applies to the selected keyframed properties; if none are selected, to every keyframed transform property of the selected layers. */
+TL.addMotionExpression = function (kind) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var expr = TL.EXPR[kind];
+    if (!expr) return TL.err("Unknown expression: " + kind);
+
+    var targets = [], i, p;
+    var props = comp.selectedProperties;
+    for (i = 0; i < props.length; i++) {
+        p = props[i];
+        if (p.propertyType === PropertyType.PROPERTY && p.canSetExpression && p.numKeys > 1) targets.push(p);
+    }
+    if (!targets.length) {
+        var layers = TL.selectedLayers(comp);
+        for (i = 0; i < layers.length; i++) {
+            var tr = layers[i].property("ADBE Transform Group");
+            if (!tr) continue;
+            for (var j = 1; j <= tr.numProperties; j++) {
+                p = tr.property(j);
+                if (p && p.propertyType === PropertyType.PROPERTY && p.canSetExpression && p.numKeys > 1) targets.push(p);
+            }
+        }
+    }
+    if (!targets.length) return TL.err("Select a property (or layer) with at least 2 keyframes.");
+
+    app.beginUndoGroup("Text Library: " + kind);
+    try {
+        for (i = 0; i < targets.length; i++) {
+            targets[i].expression = expr;
+            targets[i].expressionEnabled = true;
+        }
+        return TL.ok({ count: targets.length });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ---------- Sequence: stagger layers in time ---------- */
+
+/* offsetFrames: frames between steps; step: how many layers share a step; reverse: bottom layer first */
+TL.sequenceLayers = function (offsetFrames, step, reverse) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var layers = TL.selectedLayers(comp);
+    if (layers.length < 2) return TL.err("Select at least 2 layers.");
+    step = Math.max(1, Math.round(step));
+    if (reverse) layers.reverse();
+
+    app.beginUndoGroup("Text Library: Sequence Layers");
+    try {
+        var base = layers[0].inPoint, i;
+        for (i = 1; i < layers.length; i++) base = Math.min(base, layers[i].inPoint);
+        for (i = 0; i < layers.length; i++) {
+            (function (l, target) {
+                TL.withUnlocked(l, function () { l.startTime += target - l.inPoint; });
+            })(layers[i], base + Math.floor(i / step) * offsetFrames * comp.frameDuration);
+        }
+        return TL.ok({ count: layers.length });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ---------- Extract: pull the layers of a precomp out into the current comp ---------- */
+
+TL.extractPrecomp = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var sel = TL.selectedLayers(comp);
+    if (sel.length !== 1 || !(sel[0].source instanceof CompItem)) return TL.err("Select one precomp layer to extract.");
+    var pre = sel[0], inner = pre.source;
+    if (pre.stretch !== 100) return TL.err("Time-stretched precomps can't be extracted.");
+    if (pre.timeRemapEnabled) return TL.err("Precomps with time remapping can't be extracted.");
+
+    app.beginUndoGroup("Text Library: Extract Precomp");
+    try {
+        // a null with the precomp layer's transform: its layer space equals the precomp's comp space
+        var nul = comp.layers.addNull(comp.duration);
+        nul.name = pre.name + " (extracted)";
+        var ptr = pre.property("ADBE Transform Group"), ntr = nul.property("ADBE Transform Group");
+        var names = ["ADBE Anchor Point", "ADBE Position", "ADBE Scale", "ADBE Rotate Z"];
+        for (var n = 0; n < names.length; n++) {
+            var sp = ptr.property(names[n]), dp = ntr.property(names[n]);
+            try {
+                if (sp.numKeys > 0) {
+                    for (var k = 1; k <= sp.numKeys; k++) dp.setValueAtTime(sp.keyTime(k), sp.keyValue(k));
+                } else {
+                    dp.setValue(sp.value);
+                }
+            } catch (eT) {}
+        }
+        if (pre.parent) nul.parent = pre.parent;
+        nul.moveBefore(pre);
+        nul.enabled = false;
+
+        // copy layers top to bottom, each lands right above the precomp layer -> original order kept
+        var map = {}, copies = [], i;
+        for (i = 1; i <= inner.numLayers; i++) {
+            var src = inner.layer(i);
+            src.copyToComp(comp);
+            var c = comp.layer(1);
+            c.moveBefore(pre);
+            TL.withUnlocked(c, function () { c.startTime += pre.startTime; });
+            map[src.index] = c;
+            copies.push({ src: src, copy: c });
+        }
+        // rebuild parenting without moving anything
+        for (i = 0; i < copies.length; i++) {
+            var p = copies[i].src.parent;
+            var target = p ? map[p.index] : nul;
+            try { copies[i].copy.setParentWithJump(target); } catch (eP) { copies[i].copy.parent = target; }
+        }
+        pre.remove();
+        return TL.ok({ count: copies.length });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ---------- Merge: combine selected shape layers into one ---------- */
+
+TL.mergeShapes = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var all = TL.selectedLayers(comp), layers = [], i;
+    for (i = 0; i < all.length; i++) if (all[i] instanceof ShapeLayer) layers.push(all[i]);
+    if (layers.length < 2) return TL.err("Select at least 2 shape layers.");
+
+    app.beginUndoGroup("Text Library: Merge Shapes");
+    try {
+        // target layer space == comp space, so each group can carry its source layer's transform
+        var dst = comp.layers.addShape();
+        dst.name = "Merged Shapes";
+        var dtr = dst.property("ADBE Transform Group");
+        dtr.property("ADBE Anchor Point").setValue([0, 0]);
+        dtr.property("ADBE Position").setValue([0, 0]);
+
+        var ctx = { srcStart: 0, dstIn: 0, dstOut: 0, reverse: false, center: [comp.width / 2, comp.height / 2] };
+        var inP = layers[0].inPoint, outP = layers[0].outPoint, skippedParent = 0;
+        var TRANSFORM = [
+            ["ADBE Anchor Point", "ADBE Vector Anchor"],
+            ["ADBE Position", "ADBE Vector Position"],
+            ["ADBE Scale", "ADBE Vector Scale"],
+            ["ADBE Rotate Z", "ADBE Vector Rotation"],
+            ["ADBE Opacity", "ADBE Vector Group Opacity"]
+        ];
+
+        for (i = 0; i < layers.length; i++) {
+            var src = layers[i];
+            if (src.parent) skippedParent++;
+            inP = Math.min(inP, src.inPoint);
+            outP = Math.max(outP, src.outPoint);
+
+            var root = dst.property("ADBE Root Vectors Group");
+            var g = root.addProperty("ADBE Vector Group");
+            g.name = src.name;
+            var gi = g.propertyIndex;
+            TL.copyGroup(src.property("ADBE Root Vectors Group"), dst,
+                ["ADBE Root Vectors Group", gi, "ADBE Vectors Group"], ctx, {});
+
+            var str = src.property("ADBE Transform Group");
+            for (var t = 0; t < TRANSFORM.length; t++) {
+                var sp = str.property(TRANSFORM[t][0]);
+                var dp = TL.resolve(dst, ["ADBE Root Vectors Group", gi, "ADBE Vector Transform Group", TRANSFORM[t][1]]);
+                if (!dp) continue;
+                try {
+                    if (sp.numKeys > 0) {
+                        for (var k = 1; k <= sp.numKeys; k++) {
+                            var v = sp.keyValue(k);
+                            if (v instanceof Array && v.length > 2) v = [v[0], v[1]];
+                            dp.setValueAtTime(sp.keyTime(k), v);
+                        }
+                    } else {
+                        var sv = sp.value;
+                        if (sv instanceof Array && sv.length > 2) sv = [sv[0], sv[1]];
+                        dp.setValue(sv);
+                    }
+                } catch (eT) {}
+            }
+        }
+        dst.inPoint = inP;
+        dst.outPoint = outP;
+        dst.moveBefore(layers[0]);
+        for (i = layers.length - 1; i >= 0; i--) layers[i].remove();
+        return TL.ok({ count: layers.length, parented: skippedParent });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ---------- Add Null: at the centre of the selection, parented ---------- */
+
+TL.addNullParent = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var layers = TL.selectedLayers(comp);
+
+    app.beginUndoGroup("Text Library: Add Null");
+    try {
+        var name = TL.nextName(comp, "Null");
+        var nul = comp.layers.addNull(comp.duration);
+        nul.name = name;
+        if (!layers.length) return TL.ok({ name: name, count: 0 });
+
+        // centre of the unparented selected layers (their positions are in comp space)
+        var sx = 0, sy = 0, n = 0, i;
+        for (i = 0; i < layers.length; i++) {
+            if (layers[i].parent) continue;
+            var tr = layers[i].property("ADBE Transform Group");
+            if (!tr) continue;
+            var pos = tr.property("ADBE Position").value;
+            sx += pos[0]; sy += pos[1]; n++;
+        }
+        var ntr = nul.property("ADBE Transform Group");
+        if (n) ntr.property("ADBE Position").setValue([sx / n, sy / n]);
+        ntr.property("ADBE Anchor Point").setValue([50, 50]);
+        nul.moveBefore(layers[0]);
+
+        var parented = 0;
+        for (i = 0; i < layers.length; i++) {
+            var l = layers[i];
+            if (l.parent && TL.indexOfLayer(layers, l.parent) >= 0) continue; // keep chains inside the selection
+            TL.withUnlocked(l, function () { l.parent = nul; }); // .parent keeps the layer where it is
+            parented++;
+        }
+        for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+        nul.selected = true;
+        return TL.ok({ name: name, count: parented });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+TL.indexOfLayer = function (arr, layer) {
+    for (var i = 0; i < arr.length; i++) if (arr[i].index === layer.index) return i;
+    return -1;
+};
+
+/* ---------- Convert to Shape: text and Illustrator/vector layers ---------- */
+
+TL.menuCommand = function (name, fallbackId) {
+    var id = 0;
+    try { id = app.findMenuCommandId(name); } catch (e) {}
+    return id || fallbackId;
+};
+
+TL.convertToShape = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var layers = TL.selectedLayers(comp), texts = [], vectors = [], i;
+    for (i = 0; i < layers.length; i++) {
+        var l = layers[i];
+        if (TL.isTextLayer(l)) texts.push(l);
+        else if (l.source instanceof FootageItem && l.source.file && /\.(ai|eps|pdf)$/i.test(l.source.file.name)) vectors.push(l);
+    }
+    if (!texts.length && !vectors.length) return TL.err("Select text layers or Illustrator (.ai/.eps/.pdf) layers.");
+
+    var only = function (list) {
+        for (var j = 1; j <= comp.numLayers; j++) comp.layer(j).selected = false;
+        for (var m = 0; m < list.length; m++) list[m].selected = true;
+    };
+
+    app.beginUndoGroup("Text Library: Convert to Shape");
+    try {
+        comp.openInViewer(); // the menu commands act on the active viewer
+        if (texts.length) {
+            only(texts);
+            app.executeCommand(TL.menuCommand("Create Shapes from Text", 3781));
+        }
+        if (vectors.length) {
+            only(vectors);
+            app.executeCommand(TL.menuCommand("Create Shapes from Vector Layer", 3973));
+        }
+        return TL.ok({ count: texts.length + vectors.length });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
 /* ------------------------------------------------------------------ */
 /* Misc                                                                */
 /* ------------------------------------------------------------------ */
