@@ -3,6 +3,10 @@
     "": [
       "Text Animation",
       "Sound Effect"
+    ],
+    "Text Animation": [
+      "Simple",
+      "Complex"
     ]
   }
 }
