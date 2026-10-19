@@ -97,9 +97,89 @@
   /* Library                                                             */
   /* ------------------------------------------------------------------ */
 
+  // The library lives in the repo ("library" next to the panel code) so it travels with git push/pull.
+  function repoLib() { return path.join(systemPath('extension'), 'library'); }
+  function legacyLib() { return path.join(systemPath('myDocuments'), 'TextLibrary'); }
+
   function defaultLib() {
-    return path.join(systemPath('myDocuments'), 'TextLibrary');
+    return isDir(repoLib()) ? repoLib() : legacyLib();
   }
+
+  /* ------------------------------------------------------------------ */
+  /* GitHub sync of the library (git must be installed)                  */
+  /* ------------------------------------------------------------------ */
+
+  var childProcess = nodeRequire('child_process');
+  var gitState = { repo: false, chain: Promise.resolve() };
+
+  function gitExe() {
+    var p = 'C:\\Program Files\\Git\\cmd\\git.exe';
+    return fs.existsSync(p) ? p : 'git';
+  }
+
+  // run git inside the library folder
+  function git(args) {
+    return new Promise(function (resolve) {
+      childProcess.execFile(gitExe(), ['-C', state.lib].concat(args), { windowsHide: true, timeout: 120000 },
+        function (err, stdout, stderr) {
+          resolve({ ok: !err, out: String(stdout || ''), err: String(stderr || (err && err.message) || '') });
+        });
+    });
+  }
+
+  // git calls run one after another
+  function gitQueue(fn) {
+    gitState.chain = gitState.chain.then(fn, fn);
+    return gitState.chain;
+  }
+
+  function detectRepo() {
+    return git(['rev-parse', '--is-inside-work-tree']).then(function (r) {
+      gitState.repo = r.ok && r.out.trim() === 'true';
+      $('btnSync').hidden = !gitState.repo;
+      return gitState.repo;
+    });
+  }
+
+  function firstLine(s) { return String(s).split(/\r?\n/).filter(Boolean)[0] || 'unknown error'; }
+
+  // commit + push only the library folder (code changes are left alone)
+  function syncPush(message) {
+    if (!gitState.repo) return Promise.resolve();
+    return gitQueue(function () {
+      setSyncing(true);
+      return git(['add', '-A', '--', '.'])
+        .then(function () { return git(['commit', '-m', message, '--', '.']); })
+        .then(function (c) {
+          if (!c.ok) return { ok: true, nothing: true }; // nothing to commit
+          return git(['push', '-q']);
+        })
+        .then(function (r) {
+          setSyncing(false);
+          if (!r.ok) status('Saved locally, but GitHub sync failed: ' + firstLine(r.err), 'warn');
+        });
+    });
+  }
+
+  // bring in presets added/deleted on the other computer
+  function syncPull(quiet) {
+    if (!gitState.repo) return Promise.resolve();
+    return gitQueue(function () {
+      setSyncing(true);
+      return git(['pull', '--ff-only', '-q']).then(function (r) {
+        setSyncing(false);
+        if (!r.ok) {
+          if (!quiet) status('GitHub sync failed: ' + firstLine(r.err), 'warn');
+          return;
+        }
+        loadLibrary();
+        render();
+        if (!quiet) status('Library synced with GitHub.', 'success');
+      });
+    });
+  }
+
+  function setSyncing(on) { $('btnSync').classList.toggle('spinning', on); }
 
   function loadLibrary() {
     mkdirp(state.lib);
@@ -569,6 +649,7 @@
     loadLibrary();
     render();
     status('"' + p.name + '" deleted.', 'success');
+    syncPush('Library: delete "' + p.name + '"');
   }
 
   /* ------------------------------------------------------------------ */
@@ -762,6 +843,7 @@
         loadLibrary();
         render();
         status('"' + name + '" saved to the library.', 'success');
+        syncPush('Library: add "' + name + '"');
       })
       .catch(function (e) {
         busy(null);
@@ -780,6 +862,7 @@
     var p = path.join(state.lib, name);
     if (isDir(p)) { status('A category with this name already exists.', 'error'); return; }
     mkdirp(p);
+    fs.writeFileSync(path.join(p, '.keep'), ''); // git does not track empty folders
     closeModal('catModal');
     state.currentCat = name;
     state.query = '';
@@ -787,6 +870,7 @@
     loadLibrary();
     render();
     status('Category "' + name + '" created.', 'success');
+    syncPush('Library: add category "' + name + '"');
   }
 
   /* ------------------------------------------------------------------ */
@@ -1118,6 +1202,10 @@
     status('Library refreshed.');
   });
 
+  $('btnSync').addEventListener('click', function () {
+    syncPull(false).then(function () { return syncPush('Library: sync'); });
+  });
+
   $('btnSettings').addEventListener('click', function () {
     $('libPath').value = state.lib;
     openModal('settingsModal');
@@ -1131,6 +1219,7 @@
       state.currentCat = null;
       loadLibrary();
       render();
+      detectRepo();
     });
   });
   $('btnOpenLib').addEventListener('click', function () { host('revealFolder', state.lib); });
@@ -1150,6 +1239,11 @@
   function init() {
     var saved = null;
     try { saved = localStorage.getItem(LS_LIB); } catch (e) {}
+    // the old Documents library was moved into the repo - prefer the repo copy
+    if (saved && path.resolve(saved) === path.resolve(legacyLib()) && isDir(repoLib())) {
+      saved = null;
+      try { localStorage.removeItem(LS_LIB); } catch (e) {}
+    }
     state.lib = saved || defaultLib();
 
     try {
@@ -1167,6 +1261,9 @@
       if (r.ok) status('Ready - After Effects ' + r.version);
       else status('Host script failed to load: ' + r.error, 'error');
     });
+
+    // pull presets added / deleted on the other computer
+    detectRepo().then(function (isRepo) { if (isRepo) syncPull(true); });
   }
 
   init();

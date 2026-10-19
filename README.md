@@ -30,4 +30,11 @@ CEP panel for After Effects 2020+ (Windows): a library of text animations and co
 | `jsx/host.jsx` | After Effects side (ExtendScript) |
 | `install.ps1`, `install*.bat` | Installer / updater |
 
-The preset library itself (`Documents\TextLibrary` by default) is **not** part of the repo - copy it separately or point both computers to a shared folder in the panel settings.
+## Preset library
+
+The presets live in `library/` inside this repo, so they travel with git.
+
+- Saving, deleting a preset or creating a category in the panel commits **only `library/`** and pushes it to GitHub automatically.
+- When the panel opens it pulls from GitHub; the cloud button in the top bar syncs on demand.
+- Deleted presets disappear from the repo but stay in the git history, so they can be restored.
+- Git must be installed and signed in to GitHub (e.g. `gh auth login` + `gh auth setup-git`) for the sync to work.

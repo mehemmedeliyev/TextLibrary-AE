@@ -99,6 +99,9 @@ button:disabled { opacity: .35; cursor: default; }
 .round-btn:hover { color: var(--text); background: var(--surface-3); }
 .round-btn svg { width: 15px; height: 15px; }
 .round-btn svg.gear { stroke-width: 2; }
+.round-btn.spinning { color: var(--accent); border-color: rgba(var(--accent-rgb), .5); }
+.round-btn.spinning svg { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
 
 /* call-to-action pill (accent) - like the green "Dashboard" button */
 .cta, button.primary {

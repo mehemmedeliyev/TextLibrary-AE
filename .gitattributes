@@ -1,0 +1,4 @@
+# presets: never touch line endings in binary files
+*.aep binary
+*.png binary
+*.jpg binary
