@@ -292,6 +292,7 @@
     return wrap;
   }
 
+  // Wide and short: families are columns, In / Out / In-Out are the 3 rows - everything fits on screen.
   function defaultTable() {
     var wrap = document.createElement('div');
     wrap.appendChild(sectionTitle('Presets'));
@@ -302,21 +303,20 @@
     var corner = makeThumb(BY_NAME.linear, 'default', 'Linear');
     corner.classList.add('corner');
     table.appendChild(corner);
-    COLUMNS.forEach(function (c) {
+    FAMILIES.forEach(function (fam) {
       var h = document.createElement('div');
       h.className = 'flow-col';
-      h.textContent = c[1];
+      h.textContent = fam;
       table.appendChild(h);
     });
 
-    FAMILIES.forEach(function (fam) {
-      var base = fam.toLowerCase();
+    COLUMNS.forEach(function (c) {
       var rowName = document.createElement('div');
       rowName.className = 'flow-row';
-      rowName.textContent = fam;
+      rowName.textContent = c[1];
       table.appendChild(rowName);
-      COLUMNS.forEach(function (c) {
-        var item = BY_NAME[base + c[0]];
+      FAMILIES.forEach(function (fam) {
+        var item = BY_NAME[fam.toLowerCase() + c[0]];
         table.appendChild(item ? makeThumb(item, 'default') : document.createElement('div'));
       });
     });
