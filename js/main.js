@@ -354,7 +354,7 @@
     var offset = parseInt($('seqOffset').value, 10) || 0;
     var step = Math.max(1, parseInt($('seqStep').value, 10) || 1);
     motion('sequenceLayers', [offset, step, seqReverse], function (r) {
-      return plural(r.count, 'layer') + ' sequenced (' + offset + ' f, every ' + plural(step, 'layer') + ').';
+      return plural(r.count, 'layer') + ' sequenced - ' + (offset * step) + ' frames between layers (' + offset + ' x ' + step + ').';
     });
   });
 

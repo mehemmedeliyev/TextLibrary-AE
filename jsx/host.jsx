@@ -1502,8 +1502,9 @@ TL.addMotionExpression = function (kind) {
 /* ---------- Sequence: stagger layers in time ---------- */
 
 /*
- * offsetFrames: frames between steps; step: how many layers share a step; reverse: bottom layer first.
- * Each call pushes the layers further (cumulative): click twice with offset 2 -> 0, 4, 8 ... frames.
+ * offsetFrames: frames between neighbouring layers; step: how many times that offset is applied per click;
+ * reverse: bottom layer first. Layer i moves by i * offset * step frames, and every call adds to it
+ * (offset 4, step 5 -> 0, 20, 40, 60 frames; click again -> 0, 40, 80, 120).
  */
 TL.sequenceLayers = function (offsetFrames, step, reverse) {
     var comp = TL.activeComp();
@@ -1518,7 +1519,7 @@ TL.sequenceLayers = function (offsetFrames, step, reverse) {
         for (var i = 0; i < layers.length; i++) {
             (function (l, shift) {
                 if (shift) TL.withUnlocked(l, function () { l.startTime += shift; });
-            })(layers[i], Math.floor(i / step) * offsetFrames * comp.frameDuration);
+            })(layers[i], i * offsetFrames * step * comp.frameDuration);
         }
         return TL.ok({ count: layers.length });
     } catch (e) {
