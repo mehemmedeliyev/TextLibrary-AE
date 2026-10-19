@@ -17,7 +17,7 @@
         Flow
       </button>
       <button class="tab" data-tab="motion">
-        <svg viewBox="0 0 16 16"><circle cx="4" cy="11" r="2"/><path d="M6 10c2-1 2.5-6 4.5-6S13 6 14 6.5"/></svg>
+        <svg viewBox="0 0 16 16"><circle cx="11" cy="8" r="3.2"/><path d="M1.5 5.5h5M1 8h5M2.5 10.5h4"/></svg>
         Motion
       </button>
       <button class="tab" data-tab="edit">
@@ -25,10 +25,6 @@
         Edit
       </button>
     </nav>
-    <button class="pill-btn" id="btnDeepCopy" title="Create a fully independent copy of the selected precomp (including all nested precomps)">
-      <svg viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg>
-      Deep Copy
-    </button>
     <div class="spacer"></div>
     <button class="round-btn" id="btnRefresh" title="Refresh library">
       <svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
@@ -188,6 +184,10 @@
       <section class="m-card">
         <header class="m-head"><span>Layers</span><em>tools</em></header>
         <div class="m-list">
+          <button class="m-row" id="btnDeepCopy" title="Fully independent copy of the selected precomp (including all nested precomps)">
+            <svg viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-6A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H5"/></svg>
+            <span>Deep copy precomp</span>
+          </button>
           <button class="m-row" id="mExtract" title="Move the layers of the selected precomp into this composition">
             <svg viewBox="0 0 16 16"><rect x="2" y="5" width="9" height="9" rx="2"/><path d="M8 2h6v6M14 2L8.5 7.5"/></svg>
             <span>Extract precomp</span>
