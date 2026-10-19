@@ -187,12 +187,34 @@
    */
   function isPresetDir(dir) { return fs.existsSync(path.join(dir, 'meta.json')); }
 
+  /* custom category order (drag & drop), stored in the library so it syncs: { "<parent id>": [names] } */
+  function orderFile() { return path.join(state.lib, 'categories.json'); }
+
+  function loadOrder() {
+    try { state.order = JSON.parse(fs.readFileSync(orderFile(), 'utf8')).order || {}; } catch (e) { state.order = {}; }
+  }
+
+  function saveOrder() {
+    fs.writeFileSync(orderFile(), JSON.stringify({ order: state.order }, null, 2), 'utf8');
+  }
+
+  function sortByOrder(rel, names) {
+    var ord = state.order[rel] || [];
+    return names.sort(function (a, b) {
+      var ia = ord.indexOf(a), ib = ord.indexOf(b);
+      if (ia < 0 && ib < 0) return a.localeCompare(b);
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+  }
+
   function scanCategories(rel, depth, out) {
     var dir = rel ? path.join(state.lib, rel) : state.lib;
     var nodes = [];
-    fs.readdirSync(dir).filter(function (f) {
+    sortByOrder(rel, fs.readdirSync(dir).filter(function (f) {
       return f.charAt(0) !== '.' && isDir(path.join(dir, f)) && !isPresetDir(path.join(dir, f));
-    }).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (f) {
+    })).forEach(function (f) {
       var id = rel ? rel + '/' + f : f;
       var node = { id: id, name: f, depth: depth, children: [] };
       out.push(id);
@@ -205,6 +227,7 @@
 
   function loadLibrary() {
     mkdirp(state.lib);
+    loadOrder();
     state.presets = {};
     var ids = [];
     state.tree = scanCategories('', 0, ids);
@@ -244,6 +267,127 @@
     if (!id) return;
     var parts = id.split('/');
     for (var i = 1; i < parts.length; i++) expanded[parts.slice(0, i).join('/')] = true;
+  }
+
+  function parentOf(id) { var i = id.lastIndexOf('/'); return i < 0 ? '' : id.slice(0, i); }
+  function baseOf(id) { return id.slice(id.lastIndexOf('/') + 1); }
+
+  function findNode(id, nodes) {
+    nodes = nodes || state.tree;
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].id === id) return nodes[i];
+      var r = findNode(id, nodes[i].children);
+      if (r) return r;
+    }
+    return null;
+  }
+
+  function childNames(parent) {
+    var list = parent ? (findNode(parent) || { children: [] }).children : state.tree;
+    return list.map(function (n) { return n.name; });
+  }
+
+  // replace an id prefix (category moved) in a map keyed by category id
+  function renameKeys(map, from, to) {
+    Object.keys(map).forEach(function (k) {
+      if (k === from || k.indexOf(from + '/') === 0) {
+        var v = map[k];
+        delete map[k];
+        map[to + k.slice(from.length)] = v;
+      }
+    });
+  }
+
+  /* Drag & drop: zone 'before' / 'after' = reorder next to target, 'inside' = becomes its sub-category */
+  function moveCategory(src, target, zone) {
+    if (!src || !target || src === target) return;
+    if (target.indexOf(src + '/') === 0) return status('A category can\'t be moved into itself.', 'error');
+
+    var newParent = zone === 'inside' ? target : parentOf(target);
+    var name = baseOf(src);
+    var dest = newParent ? newParent + '/' + name : name;
+
+    if (dest !== src) {
+      if (fs.existsSync(path.join(state.lib, dest))) {
+        return status('"' + catLabel(newParent || 'top level') + '" already has a category named "' + name + '".', 'error');
+      }
+      try {
+        stopPlayback();
+        fs.renameSync(path.join(state.lib, src), path.join(state.lib, dest));
+      } catch (e) {
+        return status('Could not move the category: ' + e.message, 'error');
+      }
+      // old parent no longer lists it; ids under the moved folder change
+      var oldSibs = state.order[parentOf(src)];
+      if (oldSibs) state.order[parentOf(src)] = oldSibs.filter(function (n) { return n !== name; });
+      renameKeys(state.order, src, dest);
+      renameKeys(expanded, src, dest);
+      if (state.currentCat && (state.currentCat === src || state.currentCat.indexOf(src + '/') === 0)) {
+        state.currentCat = dest + state.currentCat.slice(src.length);
+      }
+    }
+
+    // new position among the siblings
+    var sibs = childNames(newParent).filter(function (n) { return n !== name; });
+    if (zone === 'inside') {
+      sibs.push(name);
+      expanded[target] = true;
+    } else {
+      var at = sibs.indexOf(baseOf(target));
+      sibs.splice(zone === 'after' ? at + 1 : at, 0, name);
+    }
+    state.order[newParent] = sibs;
+    saveOrder();
+    saveExpanded();
+    loadLibrary();
+    render();
+    status('Category "' + name + '" moved' + (zone === 'inside' ? ' into "' + catLabel(target) + '"' : '') + '.', 'success');
+    syncPush('Library: move category "' + src + '" -> "' + dest + '"');
+  }
+
+  var dragCat = null;
+
+  function dropZone(e, li) {
+    var r = li.getBoundingClientRect(), y = (e.clientY - r.top) / r.height;
+    return y < 0.28 ? 'before' : (y > 0.72 ? 'after' : 'inside');
+  }
+
+  function clearDropMarks() {
+    Array.prototype.forEach.call($('cats').children, function (x) {
+      x.classList.remove('drop-before', 'drop-after', 'drop-inside');
+    });
+  }
+
+  function makeDraggable(li, id) {
+    li.draggable = true;
+    li.addEventListener('dragstart', function (e) {
+      dragCat = id;
+      li.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', id); } catch (err) {}
+    });
+    li.addEventListener('dragend', function () {
+      dragCat = null;
+      li.classList.remove('dragging');
+      clearDropMarks();
+    });
+    li.addEventListener('dragover', function (e) {
+      if (!dragCat || dragCat === id || id.indexOf(dragCat + '/') === 0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      clearDropMarks();
+      li.classList.add('drop-' + dropZone(e, li));
+    });
+    li.addEventListener('dragleave', function () {
+      li.classList.remove('drop-before', 'drop-after', 'drop-inside');
+    });
+    li.addEventListener('drop', function (e) {
+      e.preventDefault();
+      var src = dragCat, zone = dropZone(e, li);
+      clearDropMarks();
+      dragCat = null;
+      moveCategory(src, id, zone);
+    });
   }
 
   function readCategory(cat) {
@@ -333,6 +477,7 @@
       li.querySelector('.label').textContent = node.name;
       li.querySelector('.label').title = catLabel(node.id);
       li.querySelector('.count').textContent = presetsUnder(node.id).length;
+      makeDraggable(li, node.id);
 
       li.querySelector('.chev').addEventListener('click', function (e) {
         if (!hasKids) return;

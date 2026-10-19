@@ -278,6 +278,13 @@ input::placeholder, textarea::placeholder { color: var(--dim); }
 .cats li.sub { margin-bottom: 2px; padding-top: 5px; padding-bottom: 5px; }
 .cats li.sub .cat-icon { width: 22px; height: 22px; background: transparent; }
 .cats li.sub .label { font-size: 12px; }
+
+/* drag & drop */
+.cats li { overflow: visible; }
+.cats li.dragging { opacity: .4; }
+.cats li.drop-before { box-shadow: inset 0 2px 0 var(--accent); border-radius: 0 0 var(--r-md) var(--r-md); }
+.cats li.drop-after { box-shadow: inset 0 -2px 0 var(--accent); border-radius: var(--r-md) var(--r-md) 0 0; }
+.cats li.drop-inside { background: rgba(var(--accent-rgb), .14); border-color: rgba(var(--accent-rgb), .55); }
 .cats li .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cats li .count {
   min-width: 22px;
