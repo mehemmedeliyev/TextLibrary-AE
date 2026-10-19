@@ -321,7 +321,7 @@
       ? '<button class="card-act primary-act" data-mode="apply" title="Add as a precomp at the current time">Apply</button>'
       : '<button class="card-act primary-act" data-mode="in" title="Add to the start of the selected layers">In</button>' +
         '<button class="card-act primary-act" data-mode="out" title="Add to the end of the selected layers (played in reverse)">Out</button>' +
-        '<button class="card-act remove-act" data-mode="remove" title="Remove this animation from the selected layers">Remove</button>';
+        '<button class="card-act remove-act" data-mode="remove" title="Remove all animation from the selected layers (keyframes, expressions, animators, effects) - static text stays">Remove</button>';
     card.innerHTML =
       '<div class="thumb"><img alt=""><div class="card-actions">' + actions + '</div></div>' +
       '<div class="meta"><span class="badge"></span><span class="name"></span><span class="cat"></span>' +
@@ -713,10 +713,10 @@
     var aep = path.join(p.dir, 'preset.aep');
     if (mode === 'remove') {
       busy('Removing animation...');
-      host('removePreset', p.name).then(function (r) {
+      host('removePreset').then(function (r) {
         busy(null);
         if (!r.ok) return status(r.error, 'error');
-        status('"' + p.name + '" removed from ' + r.layers + ' layer' + (r.layers === 1 ? '' : 's') + '.', 'success');
+        status('All animation removed from ' + r.layers + ' layer' + (r.layers === 1 ? '' : 's') + ' - static text left.', 'success');
       });
     } else if (p.type === 'complex') {
       busy('Adding composition...');

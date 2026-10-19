@@ -291,7 +291,8 @@ TL.transformMapper = function (sp, dp, ctx) {
             var a = TL.toArr(v);
             for (var i = 0; i < a.length; i++) {
                 var r = rest[i];
-                if (r && cur[i] !== undefined) a[i] = a[i] * cur[i] / r;
+                // a current value of 0 (e.g. left invisible by an old Remove) must not flatten the animation
+                if (r && cur[i] !== undefined && cur[i] !== 0) a[i] = a[i] * cur[i] / r;
             }
             return TL.fromArr(a, v);
         };
@@ -542,92 +543,100 @@ TL.expressionErrors = function (group, prefix, out) {
     }
 };
 
-/* Remove everything a preset added to the selected layers (both In and Out). */
-TL.removePreset = function (label) {
+/*
+ * Remove ALL animation from the selected layers, leaving static text:
+ * every text animator and effect (incl. Elastic/Bounce sliders), masks added by presets,
+ * every keyframe and every expression. The text itself (Source Text) is not touched.
+ * Each property is left at its resting value - the static value it had before a preset was applied
+ * if known, otherwise its keyframed value in the middle of the layer (after the in-animation).
+ */
+TL.removePreset = function () {
     var comp = TL.activeComp();
     if (!comp) return TL.err("No active composition.");
     var sel = comp.selectedLayers, layers = [], i;
     for (i = 0; i < sel.length; i++) layers.push(sel[i]);
-    if (!layers.length) return TL.err("Select the layers to remove \"" + label + "\" from.");
-
-    var suffix = TL.tag(label);
-    // Effect Parade stays in the list for effects tagged by the previous panel version
-    var parades = [["ADBE Text Properties", "ADBE Text Animators"], ["ADBE Effect Parade"], ["ADBE Mask Parade"]];
-    var tol = comp.frameDuration / 2;
+    if (!layers.length) return TL.err("Select the layers to clean.");
 
     app.beginUndoGroup("Text Library: Remove Animation");
     try {
-        var removed = 0, touched = 0;
+        var touched = 0;
         for (i = 0; i < layers.length; i++) {
-            var layer = layers[i], before = removed, p, k, j;
-
-            // 1) tagged groups: animators, effects, masks
-            for (p = 0; p < parades.length; p++) {
-                var g = TL.resolve(layer, parades[p]);
-                if (!g) continue;
-                for (j = g.numProperties; j >= 1; j--) {
-                    var item = TL.resolve(layer, parades[p]).property(j); // re-resolve: remove() invalidates refs
-                    var n = item ? item.name : "";
-                    if (n.length >= suffix.length && n.substr(n.length - suffix.length) === suffix) {
-                        item.remove();
-                        removed++;
-                    }
-                }
-            }
-
-            // 2) keyframes / expressions added to existing properties
-            var data = TL.readMark(layer, "TLA");
-            var recs = data && data[label];
-            if (recs instanceof Array) {
-                var restore = [];
-                for (var r = 0; r < recs.length; r++) {
-                    // effects added by this preset: remove the last matching one (same name + type) for each record
-                    var fx = recs[r].fx || [];
-                    for (k = fx.length - 1; k >= 0; k--) {
-                        var parade = layer.property("ADBE Effect Parade");
-                        for (j = parade.numProperties; j >= 1; j--) {
-                            var ef = layer.property("ADBE Effect Parade").property(j);
-                            if (ef && ef.matchName === fx[k].mn && ef.name === fx[k].n) { ef.remove(); removed++; break; }
-                        }
-                    }
-                    var keys = recs[r].keys || [];
-                    for (k = 0; k < keys.length; k++) {
-                        var e = keys[k], prop = TL.resolve(layer, e.p);
-                        if (!prop) continue;
-                        if (e.e) { try { prop.expression = ""; removed++; } catch (eE) {} }
-                        if (e.t) {
-                            for (j = 0; j < e.t.length; j++) {
-                                try {
-                                    if (prop.numKeys === 0) break;
-                                    var idx = prop.nearestKeyIndex(e.t[j]);
-                                    if (Math.abs(prop.keyTime(idx) - e.t[j]) <= tol) { prop.removeKey(idx); removed++; }
-                                } catch (eK) {}
-                            }
-                        }
-                        if (!e.h && e.o !== null && e.o !== undefined) restore.push(e);
-                    }
-                }
-                // put back the static values the property had before the preset was applied
-                for (k = 0; k < restore.length; k++) {
-                    try {
-                        var rp = TL.resolve(layer, restore[k].p);
-                        if (rp && rp.numKeys === 0) rp.setValue(restore[k].o);
-                    } catch (eS) {}
-                }
-                delete data[label];
-                var left = false;
-                for (var key in data) if (data.hasOwnProperty(key)) { left = true; break; }
-                TL.writeMark(layer, "TLA", left ? data : null);
-            }
-            if (removed > before) touched++;
+            var changes = 0;
+            TL.withUnlocked(layers[i], function () { changes = TL.clearLayerAnimation(layers[i]); });
+            if (changes) touched++;
         }
-        if (!removed) return TL.err("Nothing from \"" + label + "\" was found on the selected layers.");
+        if (!touched) return TL.err("The selected layers have no animation to remove.");
         return TL.ok({ layers: touched });
     } catch (e) {
         return TL.errFromException(e);
     } finally {
         app.endUndoGroup();
     }
+};
+
+TL.clearLayerAnimation = function (layer) {
+    var changes = 0, j;
+
+    // static values recorded before presets were applied: path -> value
+    var orig = {}, data = TL.readMark(layer, "TLA");
+    if (data) {
+        for (var label in data) {
+            if (!data.hasOwnProperty(label) || !(data[label] instanceof Array)) continue;
+            for (var r = 0; r < data[label].length; r++) {
+                var keys = data[label][r].keys || [];
+                for (var k = 0; k < keys.length; k++) {
+                    var e = keys[k], id = String(e.p);
+                    if (!e.h && e.o !== null && e.o !== undefined && orig[id] === undefined) orig[id] = e.o;
+                }
+            }
+        }
+    }
+
+    // 1) groups that only exist for animation: text animators, effects, preset masks
+    var removeAll = function (path, onlyTagged) {
+        var g = TL.resolve(layer, path);
+        if (!g) return;
+        for (j = g.numProperties; j >= 1; j--) {
+            var item = TL.resolve(layer, path).property(j); // re-resolve: remove() invalidates refs
+            if (!item) continue;
+            if (onlyTagged && !/ \[[^\]]+\]$/.test(item.name)) continue;
+            item.remove();
+            changes++;
+        }
+    };
+    removeAll(["ADBE Text Properties", "ADBE Text Animators"], false);
+    removeAll(["ADBE Effect Parade"], false);
+    removeAll(["ADBE Mask Parade"], true);
+
+    // 2) every keyframe and expression left on the layer
+    var mid = (layer.inPoint + layer.outPoint) / 2;
+    var walk = function (group, path) {
+        for (var n = 1; n <= group.numProperties; n++) {
+            var p = group.property(n);
+            if (!p) continue;
+            var key = group.propertyType === PropertyType.INDEXED_GROUP ? p.propertyIndex : p.matchName;
+            var pth = path.concat([key]);
+            if (p.propertyType !== PropertyType.PROPERTY) { walk(p, pth); continue; }
+            if (p.matchName === "ADBE Text Document" || p.matchName === "ADBE Marker") continue;
+
+            var rest = null;
+            try {
+                if (p.numKeys > 0) rest = orig[String(pth)] !== undefined ? orig[String(pth)] : p.valueAtTime(mid, true);
+            } catch (eR) {}
+            try { if (p.canSetExpression && p.expression !== "") { p.expression = ""; changes++; } } catch (eE) {}
+            try {
+                if (p.numKeys > 0) {
+                    while (p.numKeys > 0) p.removeKey(p.numKeys);
+                    changes++;
+                    if (rest !== null) p.setValue(rest);
+                }
+            } catch (eK) {}
+        }
+    };
+    walk(layer, []);
+
+    TL.writeMark(layer, "TLA", null);
+    return changes;
 };
 
 TL.applySimple = function (aepPath, compName, mode, label) {
