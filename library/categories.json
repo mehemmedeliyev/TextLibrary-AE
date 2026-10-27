@@ -8,8 +8,18 @@
       "Simple",
       "Complex"
     ],
-    "Sound Effect/whoosh": [
-      "alarm"
+    "Sound Effect/whoosh": [],
+    "Sound Effect": [
+      "ambience",
+      "car",
+      "chime",
+      "click",
+      "foley",
+      "fx",
+      "notification",
+      "pop",
+      "alarm",
+      "whoosh"
     ]
   }
 }
