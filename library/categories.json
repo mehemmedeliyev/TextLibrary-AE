@@ -18,8 +18,8 @@
       "fx",
       "notification",
       "pop",
-      "alarm",
-      "whoosh"
+      "whoosh",
+      "alarm"
     ]
   }
 }
