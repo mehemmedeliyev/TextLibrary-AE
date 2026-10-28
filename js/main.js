@@ -374,6 +374,14 @@
       clearDropMarks();
     });
     li.addEventListener('dragover', function (e) {
+      if (dragPreset) {
+        if (dragPreset.cat === id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        clearDropMarks();
+        li.classList.add('drop-inside');
+        return;
+      }
       if (!dragCat || dragCat === id || id.indexOf(dragCat + '/') === 0) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -385,11 +393,75 @@
     });
     li.addEventListener('drop', function (e) {
       e.preventDefault();
-      var src = dragCat, zone = dropZone(e, li);
       clearDropMarks();
+      if (dragPreset) {
+        var p = dragPreset;
+        dragPreset = null;
+        return movePreset(p, id);
+      }
+      var src = dragCat, zone = dropZone(e, li);
       dragCat = null;
       moveCategory(src, id, zone);
     });
+  }
+
+  /* presets (and sounds) are moved by dragging their card onto a category */
+  var dragPreset = null;
+
+  function makePresetDraggable(card, p) {
+    card.draggable = true;
+    card.addEventListener('dragstart', function (e) {
+      dragPreset = p;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', p.name); } catch (err) {}
+    });
+    card.addEventListener('dragend', function () {
+      dragPreset = null;
+      card.classList.remove('dragging');
+      clearDropMarks();
+    });
+  }
+
+  function movePreset(p, cat) {
+    if (!p || !cat || p.cat === cat) return;
+    stopPlayback();
+    stopSound();
+    var dest = uniqueDir(path.join(state.lib, cat, path.basename(p.dir)));
+    try {
+      fs.renameSync(p.dir, dest);
+    } catch (e) {
+      return status('Could not move "' + p.name + '": ' + e.message, 'error');
+    }
+    loadLibrary();
+    render();
+    status('"' + p.name + '" moved to "' + catLabel(cat) + '".', 'success');
+    syncPush('Library: move "' + p.name + '" -> "' + cat + '"');
+  }
+
+  // a category is deleted with everything inside it (sub-categories, presets, sounds)
+  function deleteCategory(id) {
+    var n = presetsUnder(id).length;
+    confirmAction('Remove category',
+      '"' + catLabel(id) + '"' + (n ? ' and the ' + n + ' item' + (n === 1 ? '' : 's') + ' inside it' : '') + ' will be permanently removed from the library and from disk. This cannot be undone.',
+      function () {
+        stopPlayback();
+        stopSound();
+        try {
+          rmrf(path.join(state.lib, id));
+        } catch (e) {
+          return status('Could not delete: ' + e.message, 'error');
+        }
+        var par = parentOf(id);
+        if (state.order[par]) state.order[par] = state.order[par].filter(function (x) { return x !== baseOf(id); });
+        Object.keys(state.order).forEach(function (k) { if (k === id || k.indexOf(id + '/') === 0) delete state.order[k]; });
+        saveOrder();
+        if (state.currentCat === id || String(state.currentCat).indexOf(id + '/') === 0) state.currentCat = par || null;
+        loadLibrary();
+        render();
+        status('Category "' + catLabel(id) + '" deleted.', 'success');
+        syncPush('Library: delete category "' + id + '"');
+      }, 'Remove');
   }
 
   function readCategory(cat) {
@@ -397,9 +469,11 @@
     fs.readdirSync(dir).forEach(function (f) {
       var pdir = path.join(dir, f);
       var metaFile = path.join(pdir, 'meta.json');
-      if (!isDir(pdir) || !fs.existsSync(metaFile) || !fs.existsSync(path.join(pdir, 'preset.aep'))) return;
+      if (!isDir(pdir) || !fs.existsSync(metaFile)) return;
       try {
         var meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+        // a sound keeps its audio file, every other preset its preset.aep
+        if (!fs.existsSync(path.join(pdir, meta.type === 'sound' ? String(meta.file) : 'preset.aep'))) return;
         meta.dir = pdir;
         meta.cat = cat;
         list.push(meta);
@@ -480,6 +554,7 @@
       li.querySelector('.label').title = catLabel(node.id);
       li.querySelector('.count').textContent = presetsUnder(node.id).length;
       makeDraggable(li, node.id);
+      li.addEventListener('contextmenu', function (e) { openCatMenu(e, node.id); });
 
       li.querySelector('.chev').addEventListener('click', function (e) {
         if (!hasKids) return;
@@ -515,6 +590,7 @@
 
   function renderGrid() {
     var grid = $('grid'), list = currentList();
+    stopSound();
     stopPlayback();
     grid.innerHTML = '';
     $('contentHead').textContent = state.query
@@ -525,10 +601,174 @@
     if (!list.length) {
       $('empty').innerHTML = state.query
         ? 'Nothing found.'
-        : 'This category is empty.<br>Select a text layer or open a composition in the timeline, then press <b>Save to Library</b>.';
+        : 'This category is empty.<br>Select a text layer or open a composition in the timeline, then press <b>Save to Library</b>.<br>For sound effects press <b>Import sounds</b>.';
     }
 
-    list.forEach(function (p) { grid.appendChild(makeCard(p)); });
+    list.forEach(function (p) { grid.appendChild(p.type === 'sound' ? makeSoundCard(p) : makeCard(p)); });
+  }
+
+  /* ---------- sound effects: waveform card, play in the panel, Add to the comp ---------- */
+
+  var SOUND_EXT = /\.(wav|mp3|aif|aiff|m4a|aac)$/i;
+  var sound = null; // {audio, card, raf}
+
+  function fmtLen(s) {
+    s = Math.max(0, s || 0);
+    return s < 60 ? (Math.round(s * 10) / 10) + 's' : Math.floor(s / 60) + ':' + ('0' + Math.round(s % 60)).slice(-2);
+  }
+
+  function drawWave(cv, peaks, played) {
+    var dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) return;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    var g = cv.getContext('2d'), n = peaks && peaks.length ? peaks.length : 64, bw = w / n;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var css = getComputedStyle(document.documentElement);
+    var on = css.getPropertyValue('--accent').trim() || '#3d8bff', off = 'rgba(255,255,255,.22)';
+    for (var i = 0; i < n; i++) {
+      var a = peaks && peaks.length ? peaks[i] : 0.08, bh = Math.max(2, a * h * 0.7);
+      g.fillStyle = (i + 0.5) / n <= played ? on : off;
+      g.fillRect(i * bw + bw * 0.2, (h - bh) / 2, Math.max(1, bw * 0.6), bh);
+    }
+  }
+
+  function stopSound() {
+    if (!sound) return;
+    sound.audio.pause();
+    cancelAnimationFrame(sound.raf);
+    sound.card.classList.remove('playing');
+    drawWave(sound.card.querySelector('canvas'), sound.p.peaks, 0);
+    sound = null;
+  }
+
+  // at: 0..1 - start from that point of the sound (a click on the waveform); without it a second click stops
+  function playSound(card, p, at) {
+    var same = sound && sound.card === card;
+    if (same && at != null) {
+      if (sound.audio.duration) sound.audio.currentTime = at * sound.audio.duration;
+      return;
+    }
+    stopSound();
+    if (same) return;
+    var audio = new Audio(fileUrl(path.join(p.dir, p.file)));
+    if (at) audio.addEventListener('loadedmetadata', function () { audio.currentTime = at * audio.duration; });
+    sound = { audio: audio, card: card, p: p, raf: 0 };
+    card.classList.add('playing');
+    var cv = card.querySelector('canvas');
+    var tick = function () {
+      if (!sound || sound.audio !== audio) return;
+      drawWave(cv, p.peaks, audio.duration ? audio.currentTime / audio.duration : 0);
+      sound.raf = requestAnimationFrame(tick);
+    };
+    audio.addEventListener('ended', stopSound);
+    audio.play().then(tick, function () { stopSound(); status('Could not play "' + p.name + '".', 'error'); });
+  }
+
+  function addSound(p) {
+    host('addSound', path.join(p.dir, p.file), p.name).then(function (r) {
+      if (!r.ok) return status(r.error, 'error');
+      status('"' + p.name + '" added at the current time.', 'success');
+    });
+  }
+
+  function makeSoundCard(p) {
+    var card = document.createElement('div');
+    card.className = 'card sound-card';
+    card.innerHTML =
+      '<div class="thumb"><canvas class="wave"></canvas>' +
+      '<button class="sound-play" title="Play / stop"><svg viewBox="0 0 16 16"><path class="i-play" d="M5.5 3.5v9l7-4.5z"/><path class="i-stop" d="M4.5 4.5h7v7h-7z"/></svg></button>' +
+      '<span class="sound-len"></span>' +
+      '<div class="card-actions"><button class="card-act primary-act" title="Add to the active composition at the current time">Add</button></div></div>' +
+      '<div class="meta"><span class="badge sound">SFX</span><span class="name"></span><span class="cat"></span>' +
+      '<button class="icon-btn menu-btn" title="More">&#x2630;</button></div>';
+    card.querySelector('.name').textContent = p.name;
+    card.querySelector('.name').title = p.name;
+    card.querySelector('.sound-len').textContent = fmtLen(p.duration);
+    if (state.query || p.cat !== state.currentCat) card.querySelector('.cat').textContent = p.cat.split('/').pop();
+    var cv = card.querySelector('canvas');
+    requestAnimationFrame(function () { drawWave(cv, p.peaks, 0); });
+
+    card.querySelector('.sound-play').addEventListener('click', function (e) { e.stopPropagation(); playSound(card, p); });
+    card.querySelector('.card-act').addEventListener('click', function (e) { e.stopPropagation(); addSound(p); });
+    card.addEventListener('click', function () { playSound(card, p); });
+    // click on the waveform: play from that second
+    cv.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var r = cv.getBoundingClientRect();
+      playSound(card, p, Math.max(0, Math.min(0.999, (e.clientX - r.left) / r.width)));
+    });
+    // drag the card onto a category in the sidebar to move it there
+    makePresetDraggable(card, p);
+    card.addEventListener('dblclick', function (e) { e.preventDefault(); addSound(p); });
+    card.querySelector('.menu-btn').addEventListener('click', function (e) { e.stopPropagation(); openCardMenu(this, p); });
+    return card;
+  }
+
+  // waveform bars (0..1) and length of an audio file - decoded in the panel
+  var audioCtx = null;
+  function analyseSound(file) {
+    try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return Promise.resolve({}); }
+    var b = fs.readFileSync(file), ab = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    return new Promise(function (res) {
+      audioCtx.decodeAudioData(ab, function (buf) {
+        var d = buf.getChannelData(0), N = 64, step = Math.max(1, Math.floor(d.length / N)), peaks = [], max = 0;
+        for (var i = 0; i < N; i++) {
+          var m = 0;
+          for (var j = i * step, e = Math.min(d.length, j + step); j < e; j += 4) m = Math.max(m, Math.abs(d[j]));
+          peaks.push(m); max = Math.max(max, m);
+        }
+        res({ duration: buf.duration, peaks: peaks.map(function (v) { return max ? Math.round(v / max * 100) / 100 : 0; }) });
+      }, function () { res({}); });
+    });
+  }
+
+  // Import sounds: files of the chosen folder go into the current category, sub-folders become sub-categories
+  function importSounds() {
+    if (!state.currentCat) return status('Choose a category first.', 'error');
+    host('pickFolder', 'Choose a folder of sound effects').then(function (r) {
+      if (!r.ok || !r.path) return;
+      var jobs = [];
+      (function walk(dir, cat) {
+        fs.readdirSync(dir).forEach(function (f) {
+          var full = path.join(dir, f);
+          if (f.charAt(0) === '.') return;
+          if (isDir(full)) walk(full, cat + '/' + sanitize(f));
+          else if (SOUND_EXT.test(f)) jobs.push({ src: full, cat: cat, name: f.replace(/\.[^.]+$/, '') });
+        });
+      })(r.path, state.currentCat);
+      if (!jobs.length) return status('No sound files (wav, mp3, aif, m4a) in this folder.', 'error');
+
+      var added = 0, skipped = 0, i = 0;
+      var next = function () {
+        if (i >= jobs.length) {
+          busy(null);
+          loadLibrary();
+          render();
+          status(added + ' sound' + (added === 1 ? '' : 's') + ' imported' + (skipped ? ', ' + skipped + ' already in the library' : '') + '.', 'success');
+          if (added) syncPush('Library: import ' + added + ' sounds');
+          return;
+        }
+        var j = jobs[i++], catDir = path.join(state.lib, j.cat), dir = path.join(catDir, sanitize(j.name));
+        busy('Importing sounds... ' + i + ' / ' + jobs.length);
+        if (fs.existsSync(path.join(dir, 'meta.json'))) { skipped++; return next(); }
+        try {
+          mkdirp(catDir);
+          if (!fs.existsSync(path.join(catDir, '.keep'))) fs.writeFileSync(path.join(catDir, '.keep'), '');
+          dir = uniqueDir(dir);
+          mkdirp(dir);
+          var file = 'sound' + path.extname(j.src).toLowerCase();
+          fs.writeFileSync(path.join(dir, file), fs.readFileSync(j.src));
+        } catch (e) { skipped++; return next(); }
+        analyseSound(path.join(dir, file)).then(function (a) {
+          fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({
+            name: j.name, type: 'sound', file: file, duration: a.duration || 0, peaks: a.peaks || null, created: Date.now()
+          }, null, 2), 'utf8');
+          added++;
+          next();
+        });
+      };
+      next();
+    });
   }
 
   function makeCard(p) {
@@ -568,6 +808,7 @@
       openCardMenu(this, p);
     });
     card.querySelector('.menu-btn').addEventListener('dblclick', function (e) { e.stopPropagation(); });
+    makePresetDraggable(card, p);
     return card;
   }
 
@@ -577,11 +818,9 @@
 
   var menuPreset = null;
 
-  function openCardMenu(anchor, p) {
-    var menu = $('cardMenu');
-    menuPreset = p;
+  // show a menu under (or above) a rect, kept inside the window
+  function placeMenu(menu, r) {
     menu.hidden = false;
-    var r = anchor.getBoundingClientRect();
     var left = Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8);
     var top = r.bottom + 4;
     if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
@@ -589,13 +828,55 @@
     menu.style.top = Math.max(8, top) + 'px';
   }
 
+  function openCardMenu(anchor, p) {
+    closeMenus();
+    menuPreset = p;
+    placeMenu($('cardMenu'), anchor.getBoundingClientRect());
+  }
+
+  // "Move to": every category in tree order; the preset's own category is greyed out
+  function openMoveMenu(p, r) {
+    var menu = $('moveMenu');
+    menu.innerHTML = '<div class="menu-title">Move to</div>';
+    var add = function (node) {
+      var b = document.createElement('button');
+      b.textContent = node.name;
+      b.title = catLabel(node.id);
+      b.style.paddingLeft = (12 + node.depth * 14) + 'px';
+      if (node.id === p.cat) b.disabled = true;
+      b.addEventListener('click', function (e) { e.stopPropagation(); closeMenus(); movePreset(p, node.id); });
+      menu.appendChild(b);
+      node.children.forEach(add);
+    };
+    state.tree.forEach(add);
+    placeMenu(menu, r);
+  }
+
   function closeCardMenu() {
     $('cardMenu').hidden = true;
   }
 
+  function closeMenus() {
+    ['cardMenu', 'moveMenu', 'catMenu'].forEach(function (id) { $(id).hidden = true; });
+  }
+
   document.addEventListener('click', function (e) {
-    if (!$('cardMenu').hidden && !$('cardMenu').contains(e.target)) $('cardMenu').hidden = true;
+    ['cardMenu', 'moveMenu', 'catMenu'].forEach(function (id) {
+      if (!$(id).hidden && !$(id).contains(e.target)) $(id).hidden = true;
+    });
   });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenus(); });
+
+  // right click on a category: Remove
+  var menuCat = null;
+  function openCatMenu(e, id) {
+    e.preventDefault();
+    closeMenus();
+    menuCat = id;
+    var m = $('catMenu');
+    m.hidden = false; // measured before placing
+    placeMenu(m, { left: e.clientX, right: e.clientX + m.offsetWidth, top: e.clientY, bottom: e.clientY });
+  }
 
   /* ------------------------------------------------------------------ */
   /* Motion tab                                                          */
@@ -659,7 +940,7 @@
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-new]'), function (b) {
     b.addEventListener('click', function () {
-      motion('newLayer', [b.getAttribute('data-new')], function (r) { return '"' + r.name + '" created.'; });
+      motion('newLayer', [b.getAttribute('data-new')], function (r) { return r.name ? '"' + r.name + '" created.' : 'No layer created.'; });
     });
   });
 
@@ -983,8 +1264,13 @@
   Array.prototype.forEach.call($('cardMenu').querySelectorAll('button'), function (b) {
     b.addEventListener('click', function () {
       var p = menuPreset, action = b.getAttribute('data-action');
+      var r = $('cardMenu').getBoundingClientRect();
       closeCardMenu();
       if (!p) return;
+      if (action === 'move') {
+        // opened from this click - keep the document click handler from closing it right away
+        setTimeout(function () { openMoveMenu(p, { left: r.left, right: r.right, top: r.top, bottom: r.top - 4 }); }, 0);
+      }
       if (action === 'reveal') host('revealFolder', p.dir);
       if (action === 'delete') {
         confirmAction('Delete preset', '"' + p.name + '" will be permanently removed from the library and from disk. This cannot be undone.', function () {
@@ -996,9 +1282,12 @@
 
   var confirmCallback = null;
 
-  function confirmAction(title, text, cb) {
+  // okLabel: text of the confirm button (default "Delete", shown in red)
+  function confirmAction(title, text, cb, okLabel) {
     $('confirmTitle').textContent = title;
     $('confirmText').textContent = text;
+    $('btnConfirmOk').textContent = okLabel || 'Delete';
+    $('btnConfirmOk').classList.toggle('danger', !okLabel);
     confirmCallback = cb;
     openModal('confirmModal');
   }
@@ -1012,6 +1301,7 @@
 
   function deletePreset(p) {
     stopPlayback();
+    stopSound();
     try {
       rmrf(p.dir);
     } catch (e) {
@@ -1548,8 +1838,10 @@
     $('view-edit').hidden = tab !== 'edit';
     $('view-flow').hidden = tab !== 'flow';
     $('view-motion').hidden = tab !== 'motion';
+    $('view-tools').hidden = tab !== 'tools';
     watchSelection(tab === 'edit');
     if (window.TLFlow) window.TLFlow.setVisible(tab === 'flow');
+    if (window.TLTools) window.TLTools.setVisible(tab === 'tools');
   }
 
   // Shared helpers for flow.js
@@ -1560,6 +1852,7 @@
     closeModal: closeModal,
     confirmAction: confirmAction,
     lib: function () { return state.lib; },
+    sync: syncPush,
     fs: fs,
     path: path,
     mkdirp: mkdirp
@@ -1582,6 +1875,8 @@
   });
 
   $('btnAddCat').addEventListener('click', openAddCat);
+  $('btnImportSounds').addEventListener('click', importSounds);
+  $('catRemove').addEventListener('click', function () { var id = menuCat; closeMenus(); if (id) deleteCategory(id); });
   $('btnDoAddCat').addEventListener('click', doAddCat);
   $('catName').addEventListener('keydown', function (e) { if (e.key === 'Enter') doAddCat(); });
 

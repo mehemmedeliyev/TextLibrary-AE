@@ -18,7 +18,11 @@
       </button>
       <button class="tab" data-tab="motion">
         <svg viewBox="0 0 16 16"><circle cx="11" cy="8" r="3.2"/><path d="M1.5 5.5h5M1 8h5M2.5 10.5h4"/></svg>
-        Motion
+        Functions
+      </button>
+      <button class="tab" data-tab="tools">
+        <svg viewBox="0 0 16 16"><path d="M10.2 2.3a3.3 3.3 0 0 0-3.9 4.4L2.5 10.5a1.4 1.4 0 0 0 2 2l3.8-3.8a3.3 3.3 0 0 0 4.4-3.9l-2 2-1.9-.6-.6-1.9z"/></svg>
+        Tools
       </button>
       <button class="tab" data-tab="edit">
         <svg viewBox="0 0 16 16"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></svg>
@@ -53,6 +57,10 @@
       <button class="pill-btn add-cat" id="btnAddCat">
         <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>
         New category
+      </button>
+      <button class="pill-btn add-cat" id="btnImportSounds" title="Copy a folder of sound effects into the selected category - its sub-folders become sub-categories">
+        <svg viewBox="0 0 16 16"><path d="M3 6.5v3h2.5L9 12.5v-9L5.5 6.5z"/><path d="M11.3 6a2.8 2.8 0 0 1 0 4"/></svg>
+        Import sounds
       </button>
     </aside>
     <section class="content">
@@ -203,26 +211,33 @@
       <!-- sequence -->
       <section class="m-card" data-card="sequence">
         <header class="m-head" title="Drag to reorder"><span>Sequence</span><em>stagger in time</em></header>
-        <div class="seq-row">
-          <div class="seg seq-dir" id="seqDir">
-            <button data-rev="0" class="active" title="Top layer first">
-              <svg viewBox="0 0 16 16"><path d="M2 3.5h5M5 7.5h5M8 11.5h6"/></svg>
-            </button>
-            <button data-rev="1" title="Bottom layer first">
-              <svg viewBox="0 0 16 16"><path d="M9 3.5h5M6 7.5h5M2 11.5h6"/></svg>
-            </button>
+        <div class="seq-rows">
+          <div class="seq-line">
+            <span>Order</span>
+            <div class="seq-dir" id="seqDir">
+              <button data-rev="0" class="active" title="Top layer first">
+                <svg viewBox="0 0 16 16"><path d="M2 3.5h5M5 7.5h5M8 11.5h6"/></svg>
+              </button>
+              <button data-rev="1" title="Bottom layer first">
+                <svg viewBox="0 0 16 16"><path d="M9 3.5h5M6 7.5h5M2 11.5h6"/></svg>
+              </button>
+            </div>
           </div>
-          <label class="m-num" title="Frames between neighbouring layers">
+          <label class="seq-line" title="Frames between neighbouring layers">
             <span>Offset</span>
-            <button data-num="seqOffset" data-d="-1">&minus;</button>
-            <input type="number" id="seqOffset" value="2" step="1">
-            <button data-num="seqOffset" data-d="1">+</button>
+            <span class="seq-num">
+              <button data-num="seqOffset" data-d="-1">&minus;</button>
+              <input type="number" id="seqOffset" value="2" step="1">
+              <button data-num="seqOffset" data-d="1">+</button>
+            </span>
           </label>
-          <label class="m-num" title="How many times the offset is applied per click (gap = offset x step)">
+          <label class="seq-line" title="How many times the offset is applied per click (gap = offset x step)">
             <span>Step</span>
-            <button data-num="seqStep" data-d="-1">&minus;</button>
-            <input type="number" id="seqStep" value="1" min="1" step="1">
-            <button data-num="seqStep" data-d="1">+</button>
+            <span class="seq-num">
+              <button data-num="seqStep" data-d="-1">&minus;</button>
+              <input type="number" id="seqStep" value="1" min="1" step="1">
+              <button data-num="seqStep" data-d="1">+</button>
+            </span>
           </label>
         </div>
         <button class="cta m-wide" id="mSequence">Sequence layers</button>
@@ -259,10 +274,90 @@
             <span class="m-badge"><svg viewBox="0 0 16 16"><path d="M8 2.5l5.5 9.5h-11z"/></svg></span>
             <span class="m-txt"><b>Shape</b><small>Vector layer</small></span>
           </button>
+          <button class="m-layer" data-new="solid" style="--c: 226, 120, 120" title="New solid - opens the Solid Settings (colour, size, name)">
+            <span class="m-badge"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.5" style="fill: currentColor; stroke: none"/></svg></span>
+            <span class="m-txt"><b>Solid</b><small>Colour layer</small></span>
+          </button>
         </div>
       </section>
 
     </div>
+  </main>
+
+  <!-- TOOLS -->
+  <main class="view" id="view-tools" hidden>
+    <aside class="sidebar tools-side">
+      <div class="side-label">Tools</div>
+      <ul class="cats" id="toolList">
+        <li class="active" data-tool="carousel" style="--cat: #36d6e7; --cat-rgb: 54, 214, 231">
+          <span class="cat-icon"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><rect x="6.5" y="1" width="3" height="3" rx=".8"/><rect x="12" y="6.5" width="3" height="3" rx=".8"/><rect x="6.5" y="12" width="3" height="3" rx=".8"/><rect x="1" y="6.5" width="3" height="3" rx=".8"/></svg></span>
+          <span class="label">Carousel</span>
+        </li>
+      </ul>
+    </aside>
+
+    <!-- carousel: same rig as SaaSor (control layer + "Path Carousel" mask / orbit null + expressions) -->
+    <section class="tool-pane" id="tool-carousel">
+      <div class="m-card cr-preview-card">
+        <header class="cr-head">
+          <span>Preview</span>
+          <em id="crLink" title="Controller the sliders are linked to">not linked</em>
+        </header>
+        <div class="seg cr-styles" id="crStyles">
+          <button data-style="1" class="active" title="Cards along a circle path">
+            <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/></svg>Circle
+          </button>
+          <button data-style="2" title="Cards along an open path - reshape the Path Carousel mask">
+            <svg viewBox="0 0 16 16"><path d="M2 12.5C4 4 8 13 10 7s3-3.5 4-4"/><circle cx="2" cy="12.5" r="1.2"/><circle cx="14" cy="3" r="1.2"/></svg>Path
+          </button>
+          <button data-style="3" title="3D ring seen from the side - cover flow">
+            <svg viewBox="0 0 16 16"><rect x="5.5" y="3.5" width="5" height="9" rx="1"/><path d="M3.5 5l-2 1v4l2 1M12.5 5l2 1v4l-2 1"/></svg>Vision
+          </button>
+          <button data-style="4" title="3D sphere of cards facing the camera">
+            <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><ellipse cx="8" cy="8" rx="5.5" ry="2"/><ellipse cx="8" cy="8" rx="2" ry="5.5"/></svg>Orbit
+          </button>
+        </div>
+        <div class="seg cr-presets" id="crPresets"></div>
+        <div class="cr-pathbar" id="crPathBar">
+          <button class="pill-btn" id="crSavePath" title="Save the linked carousel's path into the selected style (only the path - no keyframes or slider values)">
+            <svg viewBox="0 0 16 16"><path d="M3 2.5h8l2 2v9H3z"/><path d="M5.5 2.5v3h5v-3M5.5 13.5v-4h5v4"/></svg>
+            <span id="crSavePathLabel">Save path</span>
+          </button>
+        </div>
+        <div class="cr-stage">
+          <canvas id="crCanvas"></canvas>
+        </div>
+        <div class="cr-transport">
+          <button class="round-btn small" id="crPlay" title="Play / pause preview">
+            <svg class="i-pause" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg>
+            <svg class="i-play" viewBox="0 0 16 16"><path d="M5 3.5l7 4.5-7 4.5z"/></svg>
+          </button>
+          <span class="cr-tc" id="crTc">0:00:00:00</span>
+          <div class="spacer"></div>
+          <button class="pill-btn" id="crRefresh" title="Load the selected layers (or a selected Control layer)">
+            <svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
+            Refresh selection
+          </button>
+        </div>
+        <p class="m-note" id="crInfo">No layers selected - showing sample cards. Select layers, then Refresh.</p>
+      </div>
+
+      <div class="m-card cr-controls">
+        <header class="cr-head">
+          <span id="crCtlTitle">Circle Control✦</span>
+          <button class="cr-reset" id="crReset" title="Back to the values of the selected style">Reset</button>
+        </header>
+        <div class="cr-sliders" id="crSliders"></div>
+        <div class="cr-actions">
+          <button class="pill-btn" id="crDelete" title="Remove the linked carousel - the layers go back to how they were before Create">
+            <svg viewBox="0 0 16 16"><path d="M3.5 6.5A5 5 0 1 1 3 9"/><path d="M3 3v3.5h3.5"/></svg>
+            Remove
+          </button>
+          <button class="cta" id="crApply">Create carousel</button>
+        </div>
+        <small class="cr-foot">Drag a label left / right to scrub. A linked rig updates live - keyframe the Control layer in AE (e.g. Move Carousel) for eased moves.</small>
+      </div>
+    </section>
   </main>
 
   <!-- FLOW -->
@@ -278,19 +373,16 @@
 
         <svg class="flow-editor" id="flowEditor" viewBox="0 0 220 220"></svg>
 
-        <!-- motion preview: keyframe to keyframe, ticks show spacing per frame -->
-        <div class="flow-preview" id="flowPreview" title="Each tick is one frame step: close ticks = slow, wide gaps = fast">
+        <!-- motion preview: keyframe to keyframe -->
+        <div class="flow-preview" id="flowPreview">
           <div class="flow-track"></div>
           <span class="flow-key start"></span>
           <span class="flow-key end"></span>
-          <div class="flow-ticks" id="flowGhosts"></div>
           <div class="flow-ball" id="flowBall"></div>
         </div>
 
         <label class="flow-values">
-          <span>cubic-bezier(</span>
-          <input type="text" id="flowValues" spellcheck="false" title="x1, y1, x2, y2">
-          <span>)</span>
+          <input type="text" id="flowValues" spellcheck="false" title="cubic-bezier x1, y1, x2, y2">
         </label>
       </div>
       <div class="flow-actions">
@@ -300,7 +392,6 @@
         </button>
         <button class="cta flow-apply" id="flowApply">Apply to keyframes</button>
       </div>
-      <p class="hint">Select at least 2 keyframes in the timeline, then Apply. Double-click a curve to apply it directly.</p>
     </div>
     <div class="flow-right">
       <div id="flowLists"></div>
@@ -407,8 +498,13 @@
 
   <!-- CARD MENU -->
   <div class="menu" id="cardMenu" hidden>
+    <button data-action="move">Move to...</button>
     <button data-action="reveal">Show in folder</button>
     <button data-action="delete" class="danger-text">Delete</button>
+  </div>
+  <div class="menu move-menu" id="moveMenu" hidden></div>
+  <div class="menu" id="catMenu" hidden>
+    <button class="danger-text" id="catRemove">Remove</button>
   </div>
 
   <!-- BUSY OVERLAY -->
@@ -419,5 +515,6 @@
 
   <script src="js/main.js"></script>
   <script src="js/flow.js"></script>
+  <script src="js/tools.js"></script>
 </body>
 </html>

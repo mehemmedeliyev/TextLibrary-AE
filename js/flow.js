@@ -18,6 +18,12 @@
     ['backIn', 0.36, 0, 0.66, -0.56], ['backOut', 0.34, 1.56, 0.64, 1], ['back', 0.68, -0.6, 0.32, 1.6]
   ].map(function (d) { return { name: d[0], v: d.slice(1) }; });
 
+  // speed ramps: fast in, slow through the middle, fast out (carousel moves) - soft to hard
+  var RAMPS = [
+    ['Soft', 0.2, 0.45, 0.8, 0.55], ['Medium', 0.12, 0.55, 0.88, 0.45], ['Strong', 0.05, 0.65, 0.95, 0.35],
+    ['Hard', 0.01, 0.7, 1, 0.3], ['Extreme', 0, 0.85, 1, 0.15]
+  ].map(function (d) { return { name: 'ramp' + d[0], label: d[0], v: d.slice(1) }; });
+
   var Y_MIN = -0.4, Y_MAX = 1.4;
   var MOVE_MS = 1000, HOLD_MS = 450;
 
@@ -179,24 +185,12 @@
   /* Preview (ball moving left -> right)                                 */
   /* ------------------------------------------------------------------ */
 
-  var preview = $('flowPreview'), ball = $('flowBall'), ticks = $('flowGhosts');
-  var BALL = 14, PAD = 24, TICKS = 24; // 24 steps ~ one second at 24 fps
+  var preview = $('flowPreview'), ball = $('flowBall');
+  var BALL = 14, PAD = 24;
 
   function travel() {
     var w = preview.clientWidth;
     return { from: PAD, dist: Math.max(10, w - PAD * 2 - BALL) };
-  }
-
-  // One tick per frame step: dense ticks = slow, wide gaps = fast
-  function drawGhosts() {
-    ticks.innerHTML = '';
-    var tr = travel();
-    for (var i = 0; i <= TICKS; i++) {
-      var g = document.createElement('span');
-      g.className = 'flow-tick';
-      g.style.left = (tr.from + BALL / 2 + bezierY(state.cur, i / TICKS) * tr.dist) + 'px';
-      ticks.appendChild(g);
-    }
   }
 
   function frame(now) {
@@ -211,11 +205,8 @@
 
   function restartPreview() {
     state.startedAt = performance.now();
-    drawGhosts();
     if (state.visible && !state.raf) state.raf = requestAnimationFrame(frame);
   }
-
-  window.addEventListener('resize', function () { if (state.visible) drawGhosts(); });
 
   /* ------------------------------------------------------------------ */
   /* Preset lists                                                        */
@@ -230,11 +221,12 @@
   var COLUMNS = [['In', 'In'], ['Out', 'Out'], ['', 'In-Out']];
   var BY_NAME = {};
   DEFAULTS.forEach(function (d) { BY_NAME[d.name] = d; });
+  RAMPS.forEach(function (d) { BY_NAME[d.name] = d; });
 
   function makeThumb(item, set, label) {
     var div = document.createElement('div');
     div.className = 'flow-item';
-    div.title = item.name + '  (' + fmt(item.v) + ')';
+    div.title = (item.label ? 'Speed ramp · ' + item.label : item.name) + '  (' + fmt(item.v) + ')';
     if (state.selected && state.selected.set === set && state.selected.name === item.name) div.classList.add('active');
     var svg = el('svg', { viewBox: '0 0 56 50', class: 'flow-thumb' }, div);
     el('line', { x1: tsx(0), y1: tsy(0), x2: tsx(1), y2: tsy(0), class: 'th-base' }, svg);
@@ -260,6 +252,7 @@
     if (!sel) return 'Custom (unsaved)';
     if (sel.set !== 'default') return sel.name;
     if (sel.name === 'linear') return 'Linear';
+    if (BY_NAME[sel.name] && BY_NAME[sel.name].label) return 'Speed ramp · ' + BY_NAME[sel.name].label;
     for (var i = 0; i < FAMILIES.length; i++) {
       for (var j = 0; j < COLUMNS.length; j++) {
         if (FAMILIES[i].toLowerCase() + COLUMNS[j][0] === sel.name) return FAMILIES[i] + ' · ' + COLUMNS[j][1];
@@ -281,7 +274,7 @@
     if (!state.custom.length) {
       var p = document.createElement('p');
       p.className = 'hint flow-empty';
-      p.textContent = 'No saved curves yet. Shape a curve on the left and press Save.';
+      p.textContent = 'No saved curves yet. Shape a curve above and press Save.';
       wrap.appendChild(p);
       return wrap;
     }
@@ -299,10 +292,8 @@
     var table = document.createElement('div');
     table.className = 'flow-matrix';
 
-    // header row - the corner cell holds Linear
-    var corner = makeThumb(BY_NAME.linear, 'default', 'Linear');
-    corner.classList.add('corner');
-    table.appendChild(corner);
+    // header row: empty corner above the row names
+    table.appendChild(document.createElement('div'));
     FAMILIES.forEach(function (fam) {
       var h = document.createElement('div');
       h.className = 'flow-col';
@@ -320,6 +311,14 @@
         table.appendChild(item ? makeThumb(item, 'default') : document.createElement('div'));
       });
     });
+
+    // last row: Linear and the speed ramps (fast, slow, fast), in the same columns as the rest
+    var ramp = document.createElement('div');
+    ramp.className = 'flow-row';
+    ramp.textContent = 'Ramp';
+    ramp.title = 'Linear, then speed ramps: fast - slow - fast, soft to extreme';
+    table.appendChild(ramp);
+    [BY_NAME.linear].concat(RAMPS).forEach(function (it) { table.appendChild(makeThumb(it, 'default')); });
     wrap.appendChild(table);
     return wrap;
   }

@@ -689,6 +689,49 @@ TL.applySimple = function (aepPath, compName, mode, label) {
 /* APPLY COMPLEX - import stored comp as a precomp layer               */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* SOUNDS - import a folder of sound effects, add one at the CTI       */
+/* ------------------------------------------------------------------ */
+
+TL.pickFolder = function (title) {
+    var f = Folder.selectDialog(title || "Choose a folder");
+    return TL.ok({ path: f ? f.fsName : null });
+};
+
+// the sound is imported once (kept in "Text Library/Sounds") and added to the active comp at the current time
+TL.addSound = function (filePath, label) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var f = new File(filePath);
+    if (!f.exists) return TL.err("Sound file not found: " + filePath);
+
+    app.beginUndoGroup("Text Library: Add Sound");
+    try {
+        var root = TL.getProjectFolder(TL.PROJECT_FOLDER), folder = null, item = null, i;
+        for (i = 1; i <= root.numItems; i++) if (root.item(i) instanceof FolderItem && root.item(i).name === "Sounds") folder = root.item(i);
+        if (!folder) { folder = app.project.items.addFolder("Sounds"); folder.parentFolder = root; }
+        for (i = 1; i <= folder.numItems; i++) {
+            var it = folder.item(i);
+            if (it instanceof FootageItem && it.file && it.file.fsName === f.fsName) { item = it; break; }
+        }
+        if (!item) {
+            item = app.project.importFile(new ImportOptions(f));
+            item.parentFolder = folder;
+            if (label) item.name = label;
+        }
+        var layer = comp.layers.add(item);
+        layer.startTime = comp.time;
+        for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+        layer.selected = true;
+        try { comp.openInViewer(); } catch (eV) {}
+        return TL.ok({});
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
 TL.applyComplex = function (aepPath, compName, label) {
     var comp = TL.activeComp();
     if (!comp) return TL.err("No active composition.");
@@ -1033,6 +1076,15 @@ TL.newLayer = function (type) {
     if (!comp) return TL.err("No active composition.");
     var sel = comp.selectedLayers;
     var above = sel.length ? sel[0] : null;
+
+    // solid: After Effects' own Solid Settings dialog (colour, size, name) - like Layer > New > Solid
+    if (type === "solid") {
+        var before = comp.numLayers, cmd = app.findMenuCommandId("Solid...");
+        app.executeCommand(cmd > 0 ? cmd : 2038);
+        if (comp.numLayers === before) return TL.ok({ name: null }); // dialog cancelled
+        var made = comp.selectedLayers.length ? comp.selectedLayers[0] : comp.layer(1);
+        return TL.ok({ name: made.name });
+    }
 
     app.beginUndoGroup("Text Library: New Layer");
     try {
@@ -1920,4 +1972,540 @@ TL.revealFolder = function (path) {
     if (!f.exists) f.create();
     f.execute();
     return TL.ok({});
+};
+
+/* ------------------------------------------------------------------ */
+/* TOOLS: Carousel - same rig layout as SaaSor v2.2                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Circle / Path / Vision: a "<Shape> Control\u2726" shape layer holds the sliders, a guide solid
+ * "Path Carousel" holds the path as Mask 1, and every card runs along it (pointOnPath).
+ * Vision also tilts the ring in 3D: the cards are parented to a 3D null rotated by X / Y slider.
+ * Orbit: a 3D null "Orbit Control\u2726" holds the sliders; the cards sit on a sphere and face the camera.
+ * The panel (js/tools.js) sends the shape, slider names + values and the preset path.
+ */
+TL.CAROUSEL_TAG = "// Text Library carousel";
+TL.CAROUSEL_SHAPES = { 1: "Circle", 2: "Path", 3: "Vision", 4: "Orbit" };
+TL.CAROUSEL_PATH_COLOR = [0.18, 0.4, 0.95];
+
+TL.carouselShapeOf = function (layer) {
+    var m = layer.name.match(/^(Circle|Path|Vision|Orbit) Control\u2726/);
+    if (!m) return 0;
+    var fx = layer.property("ADBE Effect Parade");
+    if (!fx || !fx.numProperties) return 0;
+    for (var k in TL.CAROUSEL_SHAPES) if (TL.CAROUSEL_SHAPES[k] === m[1]) return +k;
+    return 0;
+};
+
+TL.isCarouselCtrl = function (layer) { return TL.carouselShapeOf(layer) > 0; };
+
+// any layer with a transform except cameras and lights. Shape / text layers fail "instanceof AVLayer" in ExtendScript.
+TL.isCardLayer = function (l) {
+    return !(l instanceof CameraLayer) && !(l instanceof LightLayer) && !!l.property("ADBE Transform Group");
+};
+
+TL.findLayerByName = function (comp, name) {
+    for (var i = 1; i <= comp.numLayers; i++) if (comp.layer(i).name === name) return comp.layer(i);
+    return null;
+};
+
+TL.unusedName = function (comp, base) {
+    if (!TL.findLayerByName(comp, base)) return base;
+    for (var n = 2; ; n++) if (!TL.findLayerByName(comp, base + " " + n)) return base + " " + n;
+};
+
+// names written into a card's expressions: [control, path layer, vision null] (from the header line)
+TL.carouselRefs = function (layer) {
+    var tr = layer.property("ADBE Transform Group");
+    var p = tr ? tr.property("ADBE Position") : null;
+    if (!p || !p.expressionEnabled || p.expression.indexOf(TL.CAROUSEL_TAG) !== 0) return null;
+    var m = p.expression.match(/^\/\/ Text Library carousel (\{[^\n]*\})/);
+    if (!m) return null;
+    try { return eval("(" + m[1] + ")"); } catch (e) { return null; }
+};
+
+TL.carouselCtrlOf = function (comp, layer) {
+    var refs = TL.carouselRefs(layer), l = refs ? TL.findLayerByName(comp, refs.ctrl) : null;
+    return (l && TL.isCarouselCtrl(l)) ? l : null;
+};
+
+TL.carouselValues = function (ctrl) {
+    var out = {}, fx = ctrl.property("ADBE Effect Parade");
+    for (var i = 1; i <= fx.numProperties; i++) out[fx.property(i).name] = fx.property(i).property(1).value;
+    return out;
+};
+
+TL.layerCard = function (comp, l) {
+    var w = 0, h = 0;
+    try {
+        var r = l.sourceRectAtTime(comp.time, false);
+        w = r.width;
+        h = r.height;
+    } catch (e) {}
+    return { name: l.name, label: l.label, w: w, h: h, index: l.index };
+};
+
+/*
+ * What the Carousel tool works on: the selected layers, and the control layer they belong to.
+ * A selected control layer alone loads the cards it drives.
+ */
+TL.carouselInfo = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.ok({ comp: null, layers: [], ctrl: null });
+    try {
+        var sel = TL.selectedLayers(comp), layers = [], ctrl = null, i, refs = null;
+        for (i = 0; i < sel.length; i++) {
+            if (TL.isCarouselCtrl(sel[i])) { if (!ctrl) ctrl = sel[i]; }
+            else if (TL.isCardLayer(sel[i])) layers.push(sel[i]);
+        }
+        if (!ctrl && layers.length) ctrl = TL.carouselCtrlOf(comp, layers[0]);
+        // the Path Carousel solid (or Vision null) selected - e.g. while reshaping the mask
+        if (!ctrl && layers.length) {
+            for (i = 1; i <= comp.numLayers && !ctrl; i++) {
+                var rf = TL.carouselRefs(comp.layer(i));
+                if (!rf) continue;
+                for (var s2 = 0; s2 < layers.length; s2++) {
+                    if (layers[s2].name === rf.path || layers[s2].name === rf.nul) { ctrl = TL.findLayerByName(comp, rf.ctrl); break; }
+                }
+            }
+            if (ctrl && !TL.isCarouselCtrl(ctrl)) ctrl = null;
+        }
+        if (ctrl) {
+            var driven = [];
+            for (i = 1; i <= comp.numLayers; i++) {
+                var l = comp.layer(i);
+                if (l !== ctrl && TL.isCardLayer(l) && TL.carouselCtrlOf(comp, l) === ctrl) {
+                    driven.push(l);
+                    if (!refs) refs = TL.carouselRefs(l);
+                }
+            }
+            if (driven.length) layers = driven;
+        }
+        var path = null;
+        if (refs && refs.path) {
+            var pl = TL.findLayerByName(comp, refs.path);
+            var m = pl ? pl.property("ADBE Mask Parade") : null;
+            if (m && m.numProperties) {
+                var sh = m.property(1).property("ADBE Mask Shape").value;
+                path = { closed: sh.closed, v: sh.vertices, i: sh.inTangents, o: sh.outTangents };
+            }
+        }
+        var cards = [];
+        for (i = 0; i < layers.length; i++) cards.push(TL.layerCard(comp, layers[i]));
+        return TL.ok({
+            comp: { name: comp.name, w: comp.width, h: comp.height, fps: comp.frameRate, time: comp.time },
+            layers: cards,
+            ctrl: ctrl ? ctrl.name : null,
+            shape: ctrl ? TL.carouselShapeOf(ctrl) : 0,
+            values: ctrl ? TL.carouselValues(ctrl) : null,
+            path: path
+        });
+    } catch (e) {
+        return TL.errFromException(e);
+    }
+};
+
+/* ---------- expressions ---------- */
+
+TL.carouselHead = function (refs) {
+    return TL.CAROUSEL_TAG + " " + TL.str(refs) + "\n";
+};
+
+// shared start of the path-based card expressions: where this card is on the path (pct 0..1)
+TL.carouselPathCore = function (refs, idx, n) {
+    return "var ctrl   = thisComp.layer(" + TL.quote(refs.ctrl) + ");\n" +
+        "var spd    = ctrl.effect(\"Speed\")(1) / 1000;\n" +
+        "var spc    = ctrl.effect(\"Spacing\")(1) / 100;\n" +
+        "var phase  = ctrl.effect(\"Phase Offset\")(1) / 100;\n" +
+        "var manual = ctrl.effect(\"Move Carousel\")(1) / 100;\n" +
+        "var n      = " + n + ";\n" +
+        "var idx    = " + idx + ";\n" +
+        "var off    = (idx / n) * spc + phase;\n" +
+        "var pct    = ((time * spd) + off + manual) % 1;\n" +
+        "if (pct < 0) pct += 1;\n" +
+        "var mp     = thisComp.layer(" + TL.quote(refs.path) + ").mask(1).maskPath;\n";
+};
+
+TL.carouselPathExpr = {
+    position:
+        "var p = mp.pointOnPath(pct);\n" +
+        "value.length > 2 ? [p[0], p[1], 0] : [p[0], p[1]];",
+    // size follows the card's place on screen, measured along the Depth Angle direction
+    scale:
+        "var globalScale = ctrl.effect(\"Global Scale\")(1);\n" +
+        "var depth       = ctrl.effect(\"Scale Depth\")(1);\n" +
+        "var scaleMin    = ctrl.effect(\"Scale Min\")(1);\n" +
+        "var dAngRad     = ctrl.effect(\"Depth Angle\")(1) * (Math.PI / 180);\n" +
+        "var pos    = mp.pointOnPath(pct);\n" +
+        "var compCX = thisComp.width  / 2;\n" +
+        "var compCY = thisComp.height / 2;\n" +
+        "var projected = (pos[0] - compCX) * Math.sin(dAngRad) + (pos[1] - compCY) * Math.cos(dAngRad);\n" +
+        "var maxDist   = Math.sqrt(compCX * compCX + compCY * compCY);\n" +
+        "var norm      = (projected / maxDist + 1) / 2;\n" +
+        "var depthScale = linear(norm, 0, 1, scaleMin, 100);\n" +
+        "var mixedScale = linear(depth / 100, 0, 1, 100, depthScale);\n" +
+        "var s = mixedScale * (globalScale / 100);\n" +
+        "value.length > 2 ? [s, s, s] : [s, s];",
+    rotation:
+        "var tang  = mp.tangentOnPath(pct);\n" +
+        "Math.atan2(tang[1], tang[0]) * (180 / Math.PI) * ctrl.effect(\"Rotation Follow\")(1);"
+};
+
+// Vision: cards turn away from the camera the further they are from the comp centre
+TL.carouselVisionRotY = function (refs) {
+    return "var maxRot = thisComp.layer(" + TL.quote(refs.ctrl) + ").effect(\"3D Y Angle\")(1);\n" +
+        "var worldPos = toComp(anchorPoint);\n" +
+        "var centerX = thisComp.width / 2;\n" +
+        "var rot = ease(Math.abs(worldPos[0] - centerX), 0, thisComp.width * (700 / 1920), 0, maxRot);\n" +
+        "(worldPos[0] < centerX) ? rot : -rot;";
+};
+
+// Orbit: golden-angle sphere; Element Count between whole numbers blends two layouts
+TL.carouselOrbitExpr = function (refs) {
+    var c = "var ctrl = thisComp.layer(" + TL.quote(refs.ctrl) + ");\n";
+    return {
+        position: c +
+            "var r = ctrl.effect(\"Radius\")(1);\n" +
+            "var rawCnt = Math.max(1, ctrl.effect(\"Element Count\")(1));\n" +
+            "var off = ctrl.effect(\"Offset\")(1);\n" +
+            "var rx = degreesToRadians(ctrl.effect(\"Rotation X\")(1) + ctrl.transform.xRotation);\n" +
+            "var ry = degreesToRadians(ctrl.effect(\"Rotation Y\")(1) + ctrl.transform.yRotation);\n" +
+            "var rz = degreesToRadians(ctrl.effect(\"Rotation Z\")(1) + ctrl.transform.zRotation);\n" +
+            "function getP(cnt) {\n" +
+            "  var i = ((index - 0.5 + off) % cnt + cnt) % cnt;\n" +
+            "  var ga = Math.PI * (3 - Math.sqrt(5));\n" +
+            "  var inc = Math.acos(1 - 2 * (i / cnt)), azi = ga * i;\n" +
+            "  return [Math.sin(inc) * Math.cos(azi), Math.cos(inc), Math.sin(inc) * Math.sin(azi)] * r;\n" +
+            "}\n" +
+            "var c1 = Math.floor(rawCnt);\n" +
+            "var p = getP(c1) + (getP(c1 + 1) - getP(c1)) * (rawCnt % 1);\n" +
+            "p = [p[0], p[1] * Math.cos(rx) - p[2] * Math.sin(rx), p[1] * Math.sin(rx) + p[2] * Math.cos(rx)];\n" +
+            "p = [p[0] * Math.cos(ry) + p[2] * Math.sin(ry), p[1], -p[0] * Math.sin(ry) + p[2] * Math.cos(ry)];\n" +
+            "p = [p[0] * Math.cos(rz) - p[1] * Math.sin(rz), p[0] * Math.sin(rz) + p[1] * Math.cos(rz), p[2]];\n" +
+            "p *= 1 + (index % 2) * 0.01;\n" +
+            "p + ctrl.position + (value - [thisComp.width / 2, thisComp.height / 2, 0]);",
+        scale: c +
+            "var cam = thisComp.activeCamera;\n" +
+            "if (!cam) cam = thisComp.layer(1);\n" +
+            "var minS = ctrl.effect(\"Scale Min\")(1), maxS = ctrl.effect(\"Scale Max\")(1);\n" +
+            "var boost = ctrl.effect(\"Perspective Boost\")(1), r = ctrl.effect(\"Radius\")(1);\n" +
+            "if (cam) {\n" +
+            "  var d = length(toWorld(anchorPoint), cam.toWorld([0, 0, 0]));\n" +
+            "  var cd = length(ctrl.toWorld([0, 0, 0]), cam.toWorld([0, 0, 0]));\n" +
+            "  var t = clamp(linear(d, cd - r, cd + r, 0, 1), 0, 1);\n" +
+            "  value * (linear(boost, 0, 100, 100, linear(t, 0, 1, maxS, minS)) / 100);\n" +
+            "} else { value; }",
+        orientation:
+            "var cam = thisComp.activeCamera;\n" +
+            "if (cam) {\n" +
+            "  var pos = toWorld(anchorPoint), cp = cam.toWorld([0, 0, 0]);\n" +
+            "  var o = lookAt(pos, cp);\n" +
+            "  dot(normalize(cp - pos), normalize(cam.toWorldVec([0, 0, 1]))) < 0 ? o + [0, 180, 0] : o;\n" +
+            "} else { value; }",
+        opacity: c +
+            "index <= Math.floor(ctrl.effect(\"Element Count\")(1)) ? value : 0;"
+    };
+};
+
+/* ---------- building the rig ---------- */
+
+TL.carouselAddSliders = function (layer, names, values) {
+    var fx = layer.property("ADBE Effect Parade");
+    for (var i = 0; i < names.length; i++) {
+        var e = fx.addProperty("ADBE Slider Control");
+        e.name = names[i];
+        fx.property(names[i]).property(1).setValue(values[i]);
+    }
+};
+
+TL.setExpr = function (prop, expr) { prop.expression = expr; };
+
+/*
+ * spec: {shape: 1..4, names: [slider names], values: [numbers], path: {v, i, o, closed} (not for Orbit)}
+ */
+TL.carouselApply = function (spec) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var sel = TL.selectedLayers(comp), cards = [], i;
+    for (i = 0; i < sel.length; i++) if (TL.isCardLayer(sel[i]) && !TL.isCarouselCtrl(sel[i])) cards.push(sel[i]);
+    if (cards.length < 2) return TL.err("Select at least 2 layers for the carousel.");
+    var shape = TL.CAROUSEL_SHAPES[spec.shape];
+    if (!shape) return TL.err("Unknown shape.");
+
+    app.beginUndoGroup("Text Library: Carousel " + shape);
+    try {
+        var refs = { ctrl: TL.unusedName(comp, shape + " Control\u2726") }, pathLayer = null, nul = null, ctrl;
+        var n = cards.length, top = cards[0];
+
+        if (shape === "Orbit") {
+            // a style made with its own camera (spec.camera > 0) gets one if the comp has none
+            var hasCam = false;
+            for (i = 1; i <= comp.numLayers; i++) if (comp.layer(i) instanceof CameraLayer) hasCam = true;
+            if (spec.camera > 0 && !hasCam) {
+                var cam = comp.layers.addCamera(TL.unusedName(comp, "Orbit Camera"), [comp.width / 2, comp.height / 2]);
+                cam.property("ADBE Camera Options Group").property("ADBE Camera Zoom").setValue(spec.camera);
+                cam.property("ADBE Transform Group").property("ADBE Anchor Point").setValue([comp.width / 2, comp.height / 2, 0]);
+                cam.property("ADBE Transform Group").property("ADBE Position").setValue([comp.width / 2, comp.height / 2, -spec.camera]);
+                cam.moveToEnd(); // card expressions use their layer index - keep them right under the control
+                refs.cam = cam.name;
+            }
+            ctrl = comp.layers.addNull(comp.duration);
+            ctrl.name = refs.ctrl;
+            ctrl.threeDLayer = true;
+            ctrl.label = 1;
+            var otr = ctrl.property("ADBE Transform Group");
+            otr.property("ADBE Anchor Point").setValue([0, 0, 0]);
+            var cp = spec.ctrlPos || [comp.width / 2, comp.height / 2]; // where the sphere sits (style preset)
+            otr.property("ADBE Position").setValue([cp[0], cp[1], 0]);
+            otr.property("ADBE Opacity").setValue(0);
+            TL.carouselAddSliders(ctrl, spec.names, spec.values);
+            ctrl.moveToBeginning(); // the card expressions count on their layer index, like SaaSor
+        } else {
+            refs.path = TL.unusedName(comp, "Path Carousel");
+            pathLayer = comp.layers.addSolid(TL.CAROUSEL_PATH_COLOR, refs.path, comp.width, comp.height, comp.pixelAspect, comp.duration);
+            pathLayer.guideLayer = true;
+            pathLayer.label = 1;
+            pathLayer.enabled = false; // the solid would cover the cards in the viewer; pointOnPath still reads its mask
+            var mask = pathLayer.property("ADBE Mask Parade").addProperty("ADBE Mask Atom");
+            mask.maskMode = MaskMode.NONE;
+            var sh = new Shape();
+            sh.vertices = spec.path.v;
+            sh.inTangents = spec.path.i;
+            sh.outTangents = spec.path.o;
+            sh.closed = !!spec.path.closed;
+            mask.property("ADBE Mask Shape").setValue(sh);
+            pathLayer.moveBefore(top);
+
+            if (shape === "Vision") {
+                refs.nul = TL.unusedName(comp, "Vision Null");
+                nul = comp.layers.addNull(comp.duration);
+                nul.name = refs.nul;
+                nul.threeDLayer = true;
+                nul.label = 1;
+                var ntr = nul.property("ADBE Transform Group");
+                ntr.property("ADBE Anchor Point").setValue([comp.width / 2, comp.height / 2, 0]);
+                var no = spec.nullOff || [0, 0, 0]; // the style's null offset from the comp centre
+                ntr.property("ADBE Position").setValue([comp.width / 2 + no[0], comp.height / 2 + no[1], no[2]]);
+                ntr.property("ADBE Opacity").setValue(0);
+                nul.moveBefore(pathLayer);
+            }
+
+            ctrl = comp.layers.addShape();
+            ctrl.name = refs.ctrl;
+            ctrl.label = 8;
+            ctrl.property("ADBE Transform Group").property("ADBE Position").setValue([comp.width / 2, comp.height / 2]);
+            TL.carouselAddSliders(ctrl, spec.names, spec.values);
+            ctrl.moveBefore(nul || pathLayer);
+
+            if (nul) {
+                var ctl = "thisComp.layer(" + TL.quote(refs.ctrl) + ")";
+                TL.setExpr(nul.property("ADBE Transform Group").property("ADBE Rotate X"), ctl + ".effect(\"X slider\")(1);");
+                TL.setExpr(nul.property("ADBE Transform Group").property("ADBE Rotate Y"), ctl + ".effect(\"Y slider\")(1);");
+            }
+        }
+
+        var head = TL.carouselHead(refs), orbit = shape === "Orbit" ? TL.carouselOrbitExpr(refs) : null;
+        for (i = 0; i < n; i++) {
+            (function (l, idx) {
+                TL.withUnlocked(l, function () {
+                    TL.writeMark(l, TL.CAROUSEL_MARK, TL.carouselSnapshot(l)); // for Remove
+                    var tr = l.property("ADBE Transform Group"), pos = tr.property("ADBE Position");
+                    if (pos.dimensionsSeparated) pos.dimensionsSeparated = false;
+                    if (orbit) {
+                        l.threeDLayer = true;
+                        pos.setValue([comp.width / 2, comp.height / 2, 0]);
+                        TL.setExpr(pos, head + orbit.position);
+                        TL.setExpr(tr.property("ADBE Scale"), head + orbit.scale);
+                        TL.setExpr(tr.property("ADBE Orientation"), head + orbit.orientation);
+                        TL.setExpr(tr.property("ADBE Opacity"), head + orbit.opacity);
+                        return;
+                    }
+                    if (nul) {
+                        l.threeDLayer = true;
+                        // parenting to the tilted null makes AE counter-rotate the card; keep its own orientation
+                        var ori = tr.property("ADBE Orientation"), keepOri = ori.value;
+                        l.parent = nul;
+                        if (!ori.numKeys) ori.setValue(keepOri);
+                        l.autoOrient = AutoOrientType.CAMERA_OR_POINT_OF_INTEREST; // cards face the camera, not the tilted ring
+                        TL.setExpr(tr.property("ADBE Rotate Y"), head + TL.carouselVisionRotY(refs));
+                    }
+                    var core = head + TL.carouselPathCore(refs, idx, n);
+                    TL.setExpr(pos, core + TL.carouselPathExpr.position);
+                    TL.setExpr(tr.property("ADBE Scale"), core + TL.carouselPathExpr.scale);
+                    TL.setExpr(tr.property("ADBE Rotate Z"), core + TL.carouselPathExpr.rotation);
+                });
+            })(cards[i], i);
+        }
+        for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+        ctrl.selected = true; // keeps the panel linked to the new rig
+        return TL.ok({ ctrl: ctrl.name, count: n });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ---------- Remove: cards go back to how they were before Create ---------- */
+
+TL.CAROUSEL_MARK = "TLCarousel";
+TL.CAROUSEL_PROPS = ["ADBE Position", "ADBE Scale", "ADBE Rotate Z", "ADBE Rotate Y", "ADBE Orientation", "ADBE Opacity"];
+
+// everything Create changes on a card: 3D, parent, auto-orient, separated position, transform values and expressions
+TL.carouselSnapshot = function (l) {
+    var tr = l.property("ADBE Transform Group"), pos = tr.property("ADBE Position");
+    var s = { threeD: l.threeDLayer, parent: l.parent ? l.parent.name : "", autoOrient: l.autoOrient, sep: pos.dimensionsSeparated, props: {} };
+    var names = TL.CAROUSEL_PROPS.concat(pos.dimensionsSeparated ? ["ADBE Position_0", "ADBE Position_1", "ADBE Position_2"] : []);
+    for (var i = 0; i < names.length; i++) {
+        var p = tr.property(names[i]);
+        if (!p) continue;
+        try {
+            s.props[names[i]] = { v: p.numKeys ? null : p.value, e: p.expression, on: p.expressionEnabled };
+        } catch (e) {} // e.g. Y Rotation of a 2D layer
+    }
+    return s;
+};
+
+TL.carouselRestore = function (comp, l, s) {
+    var tr = l.property("ADBE Transform Group"), k, p, d;
+    for (k = 0; k < TL.CAROUSEL_PROPS.length; k++) {
+        p = tr.property(TL.CAROUSEL_PROPS[k]);
+        try { if (p && p.expression) p.expression = ""; } catch (e) {}
+    }
+    var par = s.parent ? TL.findLayerByName(comp, s.parent) : null;
+    l.parent = (par && par !== l) ? par : null;
+    l.autoOrient = s.autoOrient;
+    l.threeDLayer = s.threeD;
+    if (s.sep) tr.property("ADBE Position").dimensionsSeparated = true;
+    // values after parent / 3D: both of those rewrite the transform values
+    for (var name in s.props) {
+        if (!s.props.hasOwnProperty(name)) continue;
+        p = tr.property(name);
+        d = s.props[name];
+        if (!p) continue;
+        try {
+            if (d.v !== null && !p.numKeys && !(p.dimensionsSeparated)) p.setValue(d.v);
+            if (d.e) { p.expression = d.e; p.expressionEnabled = d.on; }
+        } catch (e2) {}
+    }
+    TL.writeMark(l, TL.CAROUSEL_MARK, null);
+};
+
+// A card without a saved state (rig made before Remove existed): back to a plain layer in the comp centre
+TL.carouselResetCard = function (comp, l, refs) {
+    var tr = l.property("ADBE Transform Group"), k, p;
+    for (k = 0; k < TL.CAROUSEL_PROPS.length; k++) {
+        p = tr.property(TL.CAROUSEL_PROPS[k]);
+        try { if (p && p.expression && p.expression.indexOf(TL.CAROUSEL_TAG) === 0) p.expression = ""; } catch (e) {} // only our own expressions
+    }
+    if (l.parent && refs && l.parent.name === refs.nul) l.parent = null;
+    l.autoOrient = AutoOrientType.NO_AUTO_ORIENT;
+    var defaults = [
+        ["ADBE Position", l.threeDLayer ? [comp.width / 2, comp.height / 2, 0] : [comp.width / 2, comp.height / 2]],
+        ["ADBE Scale", l.threeDLayer ? [100, 100, 100] : [100, 100]],
+        ["ADBE Rotate Z", 0], ["ADBE Rotate Y", 0], ["ADBE Orientation", [0, 0, 0]], ["ADBE Opacity", 100]
+    ];
+    for (k = 0; k < defaults.length; k++) {
+        p = tr.property(defaults[k][0]);
+        try { if (p && !p.numKeys && !p.dimensionsSeparated) p.setValue(defaults[k][1]); } catch (e2) {}
+    }
+};
+
+// Remove a carousel: its control, path solid and null. Cards created by this version go back to their
+// state before Create; older ones keep their layers where they are and lose the expressions.
+// the carousel a selected layer belongs to: its Control, one of its cards, its Path Carousel solid or Vision null
+TL.carouselFromSelection = function (comp) {
+    var sel = TL.selectedLayers(comp), i, s;
+    for (s = 0; s < sel.length; s++) {
+        if (TL.isCarouselCtrl(sel[s])) return sel[s];
+        var c = TL.carouselCtrlOf(comp, sel[s]);
+        if (c) return c;
+    }
+    for (i = 1; i <= comp.numLayers; i++) {
+        var rf = TL.carouselRefs(comp.layer(i));
+        if (!rf) continue;
+        for (s = 0; s < sel.length; s++) {
+            if (sel[s].name === rf.path || sel[s].name === rf.nul) {
+                var ctrl = TL.findLayerByName(comp, rf.ctrl);
+                if (ctrl && TL.isCarouselCtrl(ctrl)) return ctrl;
+            }
+        }
+    }
+    return null;
+};
+
+// cheap check for the panel (polled while the Tools tab is open): is a carousel selected?
+TL.carouselSelected = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.ok({ ctrl: null });
+    try {
+        var ctrl = TL.carouselFromSelection(comp);
+        return TL.ok({ ctrl: ctrl ? ctrl.name : null, shape: ctrl ? TL.carouselShapeOf(ctrl) : 0 });
+    } catch (e) {
+        return TL.ok({ ctrl: null });
+    }
+};
+
+// Remove: control, path solid and null go; every card stays, stacked in the comp centre (100%, no rotation)
+TL.carouselDelete = function (ctrlName) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var ctrl = TL.carouselFromSelection(comp);
+    if (!ctrl && ctrlName) ctrl = TL.findLayerByName(comp, ctrlName);
+    if (!ctrl || !TL.isCarouselCtrl(ctrl)) return TL.err("Click a carousel layer in AE (a card, its Control or Path Carousel) to remove it.");
+
+    app.beginUndoGroup("Text Library: Delete Carousel");
+    try {
+        var refs = null, count = 0, i, PROPS = ["ADBE Position", "ADBE Scale", "ADBE Rotate Z", "ADBE Rotate Y", "ADBE Orientation", "ADBE Opacity"];
+        for (i = comp.numLayers; i >= 1; i--) {
+            var l = comp.layer(i);
+            if (l === ctrl || TL.carouselCtrlOf(comp, l) !== ctrl) continue;
+            refs = refs || TL.carouselRefs(l);
+            TL.withUnlocked(l, function () {
+                // saved state brings back 3D / parent / auto-orient; the card then goes to the centre
+                var snap = TL.readMark(l, TL.CAROUSEL_MARK);
+                if (snap) TL.carouselRestore(comp, l, snap);
+                TL.carouselResetCard(comp, l, refs);
+            });
+            count++;
+        }
+        var extra = refs ? [refs.path, refs.nul, refs.cam] : []; // cam: only a camera Create added
+        for (i = 0; i < extra.length; i++) {
+            var x = extra[i] ? TL.findLayerByName(comp, extra[i]) : null;
+            if (x) x.remove();
+        }
+        var name = ctrl.name;
+        ctrl.remove();
+        return TL.ok({ ctrl: name, count: count });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+// Push panel values to an existing control layer. Keyframed sliders are left alone.
+TL.carouselSet = function (ctrlName, values) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var ctrl = TL.findLayerByName(comp, ctrlName);
+    if (!ctrl || !TL.isCarouselCtrl(ctrl)) return TL.err("\"" + ctrlName + "\" was not found in the active comp.");
+    app.beginUndoGroup("Text Library: Carousel Controls");
+    try {
+        var fx = ctrl.property("ADBE Effect Parade"), skipped = 0;
+        for (var k in values) {
+            if (!values.hasOwnProperty(k)) continue;
+            var e = fx.property(k);
+            if (!e) continue;
+            var p = e.property(1);
+            if (p.numKeys > 0) { skipped++; continue; }
+            p.setValue(values[k]);
+        }
+        return TL.ok({ skipped: skipped });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
 };
