@@ -1,0 +1,12 @@
+{
+  "name": "Overshoot Scale",
+  "type": "simple",
+  "compName": "TL_PRESET",
+  "frames": 90,
+  "fps": 30,
+  "keepText": true,
+  "thumb": 54,
+  "width": 1920,
+  "height": 1080,
+  "created": 1793775060570
+}
