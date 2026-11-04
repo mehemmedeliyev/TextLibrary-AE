@@ -2,10 +2,10 @@
   "name": "Overshoot Position Scale",
   "type": "simple",
   "compName": "TL_PRESET",
-  "frames": 45,
-  "fps": 15,
-  "thumb": 27,
+  "frames": 90,
+  "fps": 30,
+  "thumb": 54,
   "width": 1920,
   "height": 1080,
-  "created": 1793701839136
+  "created": 1793771589585
 }
