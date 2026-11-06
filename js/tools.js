@@ -779,23 +779,53 @@
   });
   window.addEventListener('resize', redraw);
 
+  /* ---------- tool list: one pane at a time, only the shown tool runs ---------- */
+
+  var tools = { tab: false, current: 'carousel' };
+  try { tools.current = localStorage.getItem('tl.tool') || 'carousel'; } catch (e) {}
+
+  function showTool(name) {
+    if (!document.getElementById('tool-' + name)) name = 'carousel';
+    tools.current = name;
+    try { localStorage.setItem('tl.tool', name); } catch (e) {}
+    Array.prototype.forEach.call($('toolList').children, function (li) {
+      li.classList.toggle('active', li.getAttribute('data-tool') === name);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.tool-pane'), function (p) {
+      p.hidden = p.id !== 'tool-' + name;
+    });
+    setCarouselVisible(tools.tab && name === 'carousel');
+    if (window.TLPixelate) window.TLPixelate.setVisible(tools.tab && name === 'pixelate');
+    if (window.TLPBlur) window.TLPBlur.setVisible(tools.tab && name === 'pblur');
+  }
+
+  Array.prototype.forEach.call($('toolList').children, function (li) {
+    li.addEventListener('click', function () { showTool(li.getAttribute('data-tool')); });
+  });
+
+  function setCarouselVisible(v) {
+    if (v === state.visible) return;
+    state.visible = v;
+    if (v) {
+      state.last = 0;
+      loadCustom(); // may have changed on the other computer
+      buildStyles();
+      updatePathBar();
+      redraw();
+      refresh(true);
+      clearInterval(selTimer);
+      selTimer = setInterval(pollSelection, 700);
+      pollSelection();
+    } else {
+      clearInterval(selTimer);
+      if (state.raf) { cancelAnimationFrame(state.raf); state.raf = 0; }
+    }
+  }
+
   window.TLTools = {
     setVisible: function (v) {
-      state.visible = v;
-      if (v) {
-        state.last = 0;
-        loadCustom(); // may have changed on the other computer
-        buildStyles();
-        updatePathBar();
-        redraw();
-        refresh(true);
-        clearInterval(selTimer);
-        selTimer = setInterval(pollSelection, 700);
-        pollSelection();
-      } else {
-        clearInterval(selTimer);
-        if (state.raf) { cancelAnimationFrame(state.raf); state.raf = 0; }
-      }
+      tools.tab = v;
+      showTool(tools.current);
     },
     seek: function (t) { state.t = t; setPlaying(false); },
     // exposed for checking the preview against values sampled in After Effects

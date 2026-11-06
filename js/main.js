@@ -1349,19 +1349,25 @@
     }
     // preload so playback is smooth after the first loop
     var cache = urls.map(function (u) { var im = new Image(); im.src = u; return im; });
-    var idx = 0;
-    player = {
-      cache: cache,
-      timer: setInterval(function () {
-        idx = (idx + 1) % urls.length;
+    // frame chosen from the clock on every screen refresh: steady timing, no drift or bursts
+    var me = { cache: cache, raf: 0 }, t0 = performance.now(), shown = 0, fps = p.fps || 15;
+    function tick(now) {
+      if (player !== me) return;
+      var idx = Math.floor((now - t0) * fps / 1000) % urls.length;
+      // wait for a frame that is still loading instead of flashing an empty image
+      if (idx !== shown && cache[idx].complete) {
+        shown = idx;
         img.src = urls[idx];
-      }, 1000 / (p.fps || 15))
-    };
+      }
+      me.raf = requestAnimationFrame(tick);
+    }
+    player = me;
+    me.raf = requestAnimationFrame(tick);
   }
 
   function stopPlayback() {
     if (player) {
-      clearInterval(player.timer);
+      cancelAnimationFrame(player.raf);
       player = null;
     }
   }
@@ -1378,7 +1384,7 @@
       host('removePreset', p.name).then(function (r) {
         busy(null);
         if (!r.ok) return status(r.error, 'error');
-        status('"' + p.name + '" removed from ' + r.layers + ' layer' + (r.layers === 1 ? '' : 's') + '.', 'success');
+        status('Animation removed - ' + r.layers + ' layer' + (r.layers === 1 ? '' : 's') + ' back to static.', 'success');
       });
     } else if (p.type === 'complex') {
       busy('Adding composition...');
@@ -1839,6 +1845,7 @@
     $('view-flow').hidden = tab !== 'flow';
     $('view-motion').hidden = tab !== 'motion';
     $('view-tools').hidden = tab !== 'tools';
+    $('btnSave').hidden = tab !== 'browse'; // saving presets belongs to the library only
     watchSelection(tab === 'edit');
     if (window.TLFlow) window.TLFlow.setVisible(tab === 'flow');
     if (window.TLTools) window.TLTools.setVisible(tab === 'tools');

@@ -1303,8 +1303,8 @@ body.scrubbing, body.scrubbing * { cursor: ew-resize !important; }
 .cr-row-reset.changed { opacity: 1; color: var(--accent); }
 .cr-row-reset.changed:hover { background: rgba(var(--accent-rgb), .12); }
 /* Remove: red while there is a linked carousel to remove */
-#crDelete:not(:disabled) { color: #fff; background: #c94a4a; border-color: #c94a4a; }
-#crDelete:not(:disabled):hover { background: #d95757; border-color: #d95757; }
+#crDelete:not(:disabled), #pxRemove { color: #fff; background: #c94a4a; border-color: #c94a4a; }
+#crDelete:not(:disabled):hover, #pxRemove:hover { background: #d95757; border-color: #d95757; }
 
 /* ---------- flow layout: editor + preview on top, curve library below ---------- */
 #view-flow { flex-direction: column; flex-wrap: nowrap; overflow-y: auto; }
@@ -1332,6 +1332,95 @@ body.scrubbing, body.scrubbing * { cursor: ew-resize !important; }
 #view-flow .flow-actions .pill-btn, #view-flow .flow-apply { height: 28px; font-size: 11px; }
 #view-flow .flow-left .hint { grid-column: 2; grid-row: 5; font-size: 10px; color: var(--dim); }
 #view-flow .flow-right { flex: 0 0 auto; min-width: 0; padding: 0 14px 14px; overflow: visible; }
+
+/* PixelateClick / Progressive Blur: preview and controls always stacked, compact so it all fits without scrolling */
+#tool-pixelate, #tool-pblur { grid-template-columns: minmax(0, 640px); gap: 8px; padding: 10px; }
+.pb-stage { padding-top: 0; height: 220px; cursor: crosshair; }
+.pb-stage.grab { cursor: grabbing; }
+.pb-row { grid-template-columns: 40px 1fr 56px; padding: 0; }
+#pbRemove { color: #fff; background: #c94a4a; border-color: #c94a4a; }
+#pbRemove:hover { background: #d95757; border-color: #d95757; }
+.px-card { padding: 8px 10px; gap: 6px; }
+.px-card .cr-head { min-height: 0; }
+.px-card .cr-reset { height: 20px; }
+.px-modes { flex: 1; min-width: 0; padding: 2px; }
+.px-modes button { height: 24px; font-size: 11px; }
+.px-stage { padding-top: 0; height: 130px; }
+/* Wave table: two columns when there is room */
+.px-sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 14px; }
+.px-sliders .px-row { grid-template-columns: 66px 1fr 46px; gap: 6px; padding: 1px 0; }
+.px-sliders .cr-label { font-size: 10.5px; }
+.px-sliders .cr-num input[type=number] { padding: 2px 5px; font-size: 10.5px; }
+.px-bottom { display: flex; align-items: center; gap: 12px; }
+.px-bottom-right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.px-card .cr-actions .cta, .px-card .cr-actions .pill-btn { height: 28px; }
+.px-modes button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 6px; white-space: nowrap; }
+.px-modes button svg { width: 12px; height: 12px; }
+#pxPlay { color: var(--accent); }
+#pxPlay .i-play { display: none; }
+#pxPlay.paused .i-play { display: block; }
+#pxPlay.paused .i-pause { display: none; }
+.px-stage { cursor: crosshair; }
+.px-row { grid-template-columns: 84px 1fr 64px; padding: 3px 0; }
+.px-row .cr-label { cursor: default; }
+.px-row.changed .cr-label { color: var(--accent); }
+/* Auto color switch */
+.px-switch { display: flex; align-items: center; gap: 10px; padding: 2px 0; cursor: pointer; user-select: none; }
+.px-switch input { display: none; }
+.px-knob {
+  position: relative;
+  flex: 0 0 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: #2a2a30;
+  transition: background .15s;
+}
+.px-knob::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s, background .15s;
+}
+.px-switch input:checked + .px-knob { background: rgba(var(--accent-rgb), .35); }
+.px-switch input:checked + .px-knob::after { transform: translateX(12px); background: var(--accent); }
+.px-switch-text { flex: 1; min-width: 0; font-size: 11px; color: var(--text); }
+.px-switch-text em { font-style: normal; color: var(--dim); margin-left: 4px; }
+.px-swatch { flex: 0 0 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, .15); }
+/* 3 x 3 start points over a small layer frame */
+.px-origin {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 96px;
+  height: 60px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, .02);
+}
+.px-origin button {
+  padding: 0;
+  border: none;
+  background: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.px-origin button::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+  opacity: .5;
+}
+.px-origin button:hover::after { opacity: 1; background: var(--text); }
+.px-origin button.active::after { width: 9px; height: 9px; opacity: 1; background: var(--accent); }
 
 /* card menu > Move to: the category list */
 .move-menu { max-height: 320px; overflow-y: auto; min-width: 190px; }

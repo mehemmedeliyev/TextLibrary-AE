@@ -5,7 +5,7 @@
 
 var TL = TL || {};
 
-TL.PREVIEW_FPS = 15;
+TL.PREVIEW_FPS = 30;
 TL.PREVIEW_MAX_SEC = 8;
 TL.PREVIEW_MAX_WIDTH = 480;
 TL.PRESET_COMP = "TL_PRESET";
@@ -113,6 +113,175 @@ TL.keyRange = function (group, acc) {
 };
 
 /* ------------------------------------------------------------------ */
+/* PREVIEW FRAMES - every text reads "LOREM IPSUM" while rendering     */
+/* ------------------------------------------------------------------ */
+
+TL.PREVIEW_TEXT = "LOREM IPSUM";
+
+/*
+ * Swap every text layer of comp (and its precomps) to the preview text; returns an undo list.
+ * white: also paint the text white (simple presets, so every preview looks the same).
+ */
+TL.loremDoc = function (d, white, keep) {
+    if (!keep) d.text = TL.PREVIEW_TEXT;
+    if (white) {
+        try { d.applyFill = true; d.fillColor = [1, 1, 1]; } catch (eF) {}
+        try { d.applyStroke = false; } catch (eS) {}
+    }
+    return d;
+};
+
+TL.loremTexts = function (comp, white, undo, visited, keep) {
+    undo = undo || [];
+    visited = visited || {};
+    if (visited[comp.id]) return undo;
+    visited[comp.id] = true;
+    for (var i = 1; i <= comp.numLayers; i++) {
+        var l = comp.layer(i);
+        if (TL.isTextLayer(l)) {
+            var st = l.property("ADBE Text Properties").property("ADBE Text Document");
+            try {
+                if (st.numKeys > 0) {
+                    var keys = [];
+                    for (var k = 1; k <= st.numKeys; k++) {
+                        keys.push(st.keyValue(k));
+                        st.setValueAtKey(k, TL.loremDoc(st.keyValue(k), white, keep));
+                    }
+                    undo.push({ p: st, keys: keys });
+                } else {
+                    undo.push({ p: st, doc: st.value });
+                    st.setValue(TL.loremDoc(st.value, white, keep));
+                }
+            } catch (e) {}
+        } else if (l.source && l.source instanceof CompItem) {
+            TL.loremTexts(l.source, white, undo, visited, keep);
+        }
+    }
+    return undo;
+};
+
+TL.restoreTexts = function (undo) {
+    for (var i = undo.length - 1; i >= 0; i--) {
+        var u = undo[i];
+        try {
+            if (u.keys) {
+                for (var k = 1; k <= u.keys.length; k++) u.p.setValueAtKey(k, u.keys[k - 1]);
+            } else {
+                u.p.setValue(u.doc);
+            }
+        } catch (e) {}
+    }
+};
+
+/* Render the preview PNGs of a preset comp into folder; returns the frame count. */
+TL.renderPreview = function (target, type, folder, keepText) {
+    var start, end;
+    if (type === "simple") {
+        var l = target.layer(1);
+        var r = TL.keyRange(l, { min: null, max: null });
+        if (r.min === null) {
+            start = l.inPoint;
+            end = Math.min(l.outPoint, l.inPoint + 3);
+        } else {
+            start = Math.max(l.inPoint, r.min - 0.2);
+            end = Math.min(l.outPoint, r.max + 0.8);
+        }
+    } else {
+        start = target.workAreaStart;
+        end = target.workAreaStart + target.workAreaDuration;
+    }
+    if (end - start > TL.PREVIEW_MAX_SEC) end = start + TL.PREVIEW_MAX_SEC;
+    if (end <= start) end = start + 1 / TL.PREVIEW_FPS;
+
+    var oldRes = target.resolutionFactor;
+    var f = Math.max(1, Math.ceil(target.width / TL.PREVIEW_MAX_WIDTH));
+    target.resolutionFactor = [f, f];
+    var undo = TL.loremTexts(target, type === "simple", null, null, keepText);
+    var count = Math.max(1, Math.floor((end - start) * TL.PREVIEW_FPS));
+    var wrap = null, shot = target, hidden = null;
+    try {
+        if (type === "simple") {
+            hidden = target.layer(1).enabled ? null : target.layer(1); // the layer may have been saved with its eye off
+            if (hidden) hidden.enabled = true;
+            wrap = TL.previewWrap(target, end - 1 / TL.PREVIEW_FPS);
+            if (wrap) { wrap.resolutionFactor = [f, f]; shot = wrap; }
+        }
+        for (var i = 0; i < count; i++) {
+            var name = String(i + 1);
+            while (name.length < 4) name = "0" + name;
+            shot.saveFrameToPng(start + i / TL.PREVIEW_FPS, new File(folder.fsName + "/" + name + ".png"));
+        }
+    } finally {
+        try { if (wrap) wrap.remove(); } catch (eW) {}
+        try { if (hidden) hidden.enabled = false; } catch (eH) {}
+        TL.restoreTexts(undo);
+        target.resolutionFactor = oldRes;
+    }
+    return count;
+};
+
+/*
+ * Simple presets keep the font size / position of the layer they were made from, so previews
+ * would differ wildly. Wrap the preset comp in a temp comp that centres the text (as it rests
+ * at time t) and scales it to one standard letter size (font size, so short words and long
+ * paragraphs read the same size; very long text is shrunk to fit). Returns the wrapper comp, or null.
+ */
+TL.PREVIEW_FONT = 0.094;       // font size on screen, of the comp height
+TL.PREVIEW_TEXT_WIDTH = 0.9;   // max, of the comp width
+TL.PREVIEW_TEXT_HEIGHT = 0.85; // max, of the comp height
+TL.previewWrap = function (target, t) {
+    var l = target.layer(1);
+    if (!TL.isTextLayer(l)) return null;
+    var r = l.sourceRectAtTime(t, false);
+    if (!r || r.width <= 0 || r.height <= 0) return null;
+    var tr = l.property("ADBE Transform Group");
+    var pos = tr.property("ADBE Position").valueAtTime(t, false);
+    var anc = tr.property("ADBE Anchor Point").valueAtTime(t, false);
+    var sc = tr.property("ADBE Scale").valueAtTime(t, false);
+    var sx = sc[0] / 100, sy = sc[1] / 100;
+    var bw = r.width * Math.abs(sx), bh = r.height * Math.abs(sy);
+    if (bw <= 0 || bh <= 0) return null;
+    var cx = pos[0] + (r.left + r.width / 2 - anc[0]) * sx;
+    var cy = pos[1] + (r.top + r.height / 2 - anc[1]) * sy;
+    var fs = 0;
+    try { fs = l.property("ADBE Text Properties").property("ADBE Text Document").valueAtTime(t, false).fontSize * Math.abs(sy); } catch (eF) {}
+    var k = Math.min(TL.PREVIEW_TEXT_WIDTH * target.width / bw, TL.PREVIEW_TEXT_HEIGHT * target.height / bh);
+    if (fs > 0) k = Math.min(k, TL.PREVIEW_FONT * target.height / fs);
+
+    var wrap = app.project.items.addComp("TL_PREVIEW_WRAP", target.width, target.height, target.pixelAspect, target.duration, target.frameRate);
+    wrap.bgColor = target.bgColor;
+    var L = wrap.layers.add(target);
+    L.startTime = 0;
+    try { L.collapseTransformation = true; } catch (eC) {} // sharp text, nothing clipped at the comp edge
+    L.property("ADBE Transform Group").property("ADBE Anchor Point").setValue([cx, cy]);
+    L.property("ADBE Transform Group").property("ADBE Position").setValue([target.width / 2, target.height / 2]);
+    L.property("ADBE Transform Group").property("ADBE Scale").setValue([k * 100, k * 100]);
+    return wrap;
+};
+
+/* Re-render the preview of a stored preset (imports its preset.aep, then removes it again). */
+TL.rerenderPreview = function (destPath, compName, type, keepText) {
+    var imported = null;
+    try {
+        var f = new File(destPath + "/preset.aep");
+        if (!f.exists) return TL.err("Preset file not found: " + f.fsName);
+        imported = app.project.importFile(new ImportOptions(f));
+        var target = TL.findCompIn(imported, compName || TL.PRESET_COMP);
+        if (!target) return TL.err("Preset composition not found.");
+        var folder = new Folder(destPath + "/frames");
+        if (!folder.exists) folder.create();
+        var old = folder.getFiles("*.png");
+        for (var i = 0; i < old.length; i++) old[i].remove();
+        var count = TL.renderPreview(target, type, folder, keepText);
+        return TL.ok({ frames: count, thumb: Math.max(1, Math.round(count * 0.6)) });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        try { if (imported) imported.remove(); } catch (eR) {}
+    }
+};
+
+/* ------------------------------------------------------------------ */
 /* SAVE  (two steps so preview frames can finish writing in between)   */
 /* ------------------------------------------------------------------ */
 
@@ -150,38 +319,16 @@ TL.saveBegin = function (type, destPath) {
         var framesFolder = new Folder(dest.fsName + "/frames");
         if (!framesFolder.exists) framesFolder.create();
 
-        var target, start, end;
+        var target;
         if (type === "simple") {
             target = tempComp = proj.items.addComp(TL.PRESET_COMP, comp.width, comp.height, comp.pixelAspect, comp.duration, comp.frameRate);
             target.bgColor = [0, 0, 0];
             srcLayer.copyToComp(target);
-            var l = target.layer(1);
-            var r = TL.keyRange(l, { min: null, max: null });
-            if (r.min === null) {
-                start = l.inPoint;
-                end = Math.min(l.outPoint, l.inPoint + 3);
-            } else {
-                start = Math.max(l.inPoint, r.min - 0.2);
-                end = Math.min(l.outPoint, r.max + 0.8);
-            }
         } else {
             target = comp;
-            start = comp.workAreaStart;
-            end = comp.workAreaStart + comp.workAreaDuration;
         }
-        if (end - start > TL.PREVIEW_MAX_SEC) end = start + TL.PREVIEW_MAX_SEC;
-        if (end <= start) end = start + 1 / TL.PREVIEW_FPS;
-
         var oldRes = target.resolutionFactor;
-        var f = Math.max(1, Math.ceil(target.width / TL.PREVIEW_MAX_WIDTH));
-        target.resolutionFactor = [f, f];
-
-        var count = Math.max(1, Math.floor((end - start) * TL.PREVIEW_FPS));
-        for (var i = 0; i < count; i++) {
-            var name = String(i + 1);
-            while (name.length < 4) name = "0" + name;
-            target.saveFrameToPng(start + i / TL.PREVIEW_FPS, new File(framesFolder.fsName + "/" + name + ".png"));
-        }
+        var count = TL.renderPreview(target, type, framesFolder);
 
         TL._pending = {
             compId: target.id,
@@ -405,13 +552,14 @@ TL.copyProp = function (sp, dp, ctx, opts, path) {
             if (rec) rec.push({ p: path, t: times, h: hadKeys, o: orig });
         } catch (eK) {}
     } else if (!opts.animatedOnly && sp.isModified) {
-        try { dp.setValue(sp.value); } catch (eV) {}
+        // with an expression, .value is the expression result - copy the value underneath it
+        try { dp.setValue(hasExpr ? sp.valueAtTime(0, true) : sp.value); } catch (eV) {}
     }
 
     if (hasExpr) {
         try {
             if (rec && dp.expression === "") rec.push({ p: path, e: 1 });
-            dp.expression = sp.expression;
+            dp.expression = TL.markerTiming(sp.expression, ctx);
             dp.expressionEnabled = sp.expressionEnabled;
         } catch (eE) {}
     }
@@ -441,6 +589,14 @@ TL.clearAnimator = function (dstLayer, animPath) {
     }
 };
 
+/* A property that carries something to copy: keyframes, an expression or a non-default value. */
+TL.propInUse = function (sp) {
+    if (sp.propertyType !== PropertyType.PROPERTY) return true;
+    try { if (sp.numKeys > 0 || sp.isModified) return true; } catch (e1) {}
+    try { return sp.canSetExpression && sp.expression !== ""; } catch (e2) {}
+    return false;
+};
+
 /*
  * Recursively copy a property group. Destination is addressed by a path from the layer and
  * re-resolved every time, because adding properties invalidates existing object references.
@@ -455,6 +611,7 @@ TL.copyGroup = function (sg, dstLayer, dPath, ctx, opts) {
         var childKey;
         if (dg.propertyType === PropertyType.INDEXED_GROUP) {
             if (!dg.canAddProperty(sp.matchName)) continue;
+            if (opts.phase && sp.matchName === "ADBE Text Animator" && TL.animPhase(sp.name) && TL.animPhase(sp.name) !== opts.phase) continue;
             var added = dg.addProperty(sp.matchName);
             if (!added) continue;
             childKey = added.propertyIndex;
@@ -464,7 +621,13 @@ TL.copyGroup = function (sg, dstLayer, dPath, ctx, opts) {
             if (sp.matchName === "ADBE Mask Atom") TL.copyMaskAttrs(sp, added);
             if (sp.matchName === "ADBE Text Animator") TL.clearAnimator(dstLayer, dPath.concat([childKey]));
         } else {
-            if (!dg.property(sp.matchName)) continue;
+            if (dg.matchName === "ADBE Text Animator Properties") {
+                // every animator lists all 100+ properties, but only added ones take effect:
+                // add (activate) the ones the source uses, skip the rest
+                if (!TL.propInUse(sp)) continue;
+                try { dg.addProperty(sp.matchName); } catch (eA) {}
+            }
+            if (!TL.resolve(dstLayer, dPath.concat([sp.matchName]))) continue;
             childKey = sp.matchName;
         }
 
@@ -475,6 +638,78 @@ TL.copyGroup = function (sg, dstLayer, dPath, ctx, opts) {
             TL.copyGroup(sp, dstLayer, childPath, ctx, opts);
         }
     }
+};
+
+/*
+ * TR In / TR Out markers (like Animation Composer): presets whose expressions time the transition
+ * from the layer in/out point ("var tTrI=bL.inPoint+1.27;") are rewritten on apply to read the
+ * time of a "TR In" / "TR Out" layer marker instead, so dragging the marker changes the duration.
+ * The offsets found are kept on ctx, to place the marker.
+ */
+TL.TR_IN = "TR In";
+TL.TR_OUT = "TR Out";
+TL.TR_FN = "function tlMk(n,d){for(var i=1;i<=bL.marker.numKeys;i++){var k=bL.marker.key(i);if(k.comment==n)return k.time;}return d;}";
+
+TL.markerTiming = function (expr, ctx) {
+    if (!expr || expr.indexOf("tTrI=") < 0 || expr.indexOf("tlMk(") >= 0) return expr;
+    var mi = /var tTrI=bL\.inPoint\+([0-9.]+);/.exec(expr), mo = /var tTrO=bL\.outPoint-([0-9.]+);/.exec(expr);
+    if (!mi && !mo) return expr;
+    if (mi) {
+        if (ctx && ctx.trIn === undefined) ctx.trIn = parseFloat(mi[1]);
+        expr = expr.replace(mi[0], "var tTrI=tlMk('" + TL.TR_IN + "',bL.inPoint+" + mi[1] + ");");
+    }
+    if (mo) {
+        if (ctx && ctx.trOut === undefined) ctx.trOut = parseFloat(mo[1]);
+        expr = expr.replace(mo[0], "var tTrO=tlMk('" + TL.TR_OUT + "',bL.outPoint-" + mo[1] + ");");
+    }
+    return expr.replace("var tTrI=", TL.TR_FN + "var tTrI=");
+};
+
+TL.findMarker = function (layer, comment) {
+    var mk = layer.property("ADBE Marker");
+    for (var i = 1; i <= mk.numKeys; i++) if (mk.keyValue(i).comment === comment) return i;
+    return 0;
+};
+
+/* After In / Out: put the matching marker on the layer (kept where it is if already there). */
+TL.addTrMarker = function (layer, mode, ctx) {
+    try {
+        var out = mode === "out", d = out ? ctx.trOut : ctx.trIn;
+        if (d === undefined) return;
+        var name = out ? TL.TR_OUT : TL.TR_IN;
+        if (TL.findMarker(layer, name)) return;
+        var t = out ? layer.outPoint - d : layer.inPoint + d;
+        layer.property("ADBE Marker").setValueAtTime(t, new MarkerValue(name));
+    } catch (e) {}
+};
+
+/* After Remove: drop TR markers no animator reads any more. */
+TL.cleanTrMarkers = function (layer) {
+    try {
+        var uses = { "in": false, "out": false };
+        var an = layer.property("ADBE Text Properties").property("ADBE Text Animators");
+        for (var i = 1; i <= an.numProperties; i++) {
+            var ph = TL.animPhase(an.property(i).name);
+            if (ph) uses[ph] = true;
+        }
+        var drop = [[TL.TR_IN, uses["in"]], [TL.TR_OUT, uses["out"]]];
+        for (var k = 0; k < drop.length; k++) {
+            if (drop[k][1]) continue;
+            var idx;
+            while ((idx = TL.findMarker(layer, drop[k][0])) > 0) layer.property("ADBE Marker").removeKey(idx);
+        }
+    } catch (e) {}
+};
+
+/* "IN Overshoot" -> "in", "OUT Overshoot" -> "out", anything else -> null */
+TL.animPhase = function (name) {
+    var m = /^(IN|OUT) /.exec(String(name));
+    return m ? m[1].toLowerCase() : null;
+};
+TL.hasPhases = function (anims) {
+    var seen = {};
+    for (var i = 1; i <= anims.numProperties; i++) seen[TL.animPhase(anims.property(i).name)] = true;
+    return !!(seen["in"] && seen["out"]);
 };
 
 /* mode: "in" | "out"; label: preset name used to tag what is added (for Remove) */
@@ -494,9 +729,12 @@ TL.copyLayerAnimation = function (src, dst, srcComp, mode, label) {
         try { fn(); } catch (e) { warnings.push(name + ": " + e.toString()); }
     };
 
-    try { if (src.threeDLayer && !dst.threeDLayer) dst.threeDLayer = true; } catch (e1) {}
-    try { if (src.threeDPerChar && TL.isTextLayer(dst)) dst.threeDPerChar = true; } catch (e2) {}
-    try { if (src.motionBlur) dst.motionBlur = true; } catch (e3) {}
+    // layer switches the preset turns on are remembered (TLS mark), so Remove can turn them off again
+    var sw = TL.readMark(dst, "TLS") || {};
+    try { if (src.threeDLayer && !dst.threeDLayer) { dst.threeDLayer = true; sw.d3 = true; } } catch (e1) {}
+    try { if (src.threeDPerChar && TL.isTextLayer(dst) && !dst.threeDPerChar) { dst.threeDPerChar = true; sw.pc = true; } } catch (e2) {}
+    try { if (src.motionBlur && !dst.motionBlur) { dst.motionBlur = true; sw.mb = true; } } catch (e3) {}
+    if (sw.d3 || sw.pc || sw.mb) TL.writeMark(dst, "TLS", sw);
 
     if (TL.isTextLayer(src) && TL.isTextLayer(dst)) {
         var st = src.property("ADBE Text Properties");
@@ -504,7 +742,9 @@ TL.copyLayerAnimation = function (src, dst, srcComp, mode, label) {
             TL.copyGroup(st.property("ADBE Text More Options"), dst, ["ADBE Text Properties", "ADBE Text More Options"], ctx, { record: true });
         });
         part("Text animators", function () {
-            TL.copyGroup(st.property("ADBE Text Animators"), dst, ["ADBE Text Properties", "ADBE Text Animators"], ctx, {});
+            // presets with separate "IN ..." / "OUT ..." animators: In adds only the IN ones, Out only the OUT ones
+            var anims = st.property("ADBE Text Animators"), phase = TL.hasPhases(anims) ? (mode === "out" ? "out" : "in") : null;
+            TL.copyGroup(anims, dst, ["ADBE Text Properties", "ADBE Text Animators"], ctx, { phase: phase });
         });
     }
     part("Masks", function () { TL.copyGroup(src.property("ADBE Mask Parade"), dst, ["ADBE Mask Parade"], ctx, {}); });
@@ -529,6 +769,7 @@ TL.copyLayerAnimation = function (src, dst, srcComp, mode, label) {
         TL.writeMark(dst, "TLA", data);
     }
 
+    if (TL.isTextLayer(dst)) TL.addTrMarker(dst, mode, ctx);
     TL.expressionErrors(dst, dst.name, warnings);
     return warnings;
 };
@@ -556,28 +797,100 @@ TL.expressionErrors = function (group, prefix, out) {
  * Other presets on the same layer stay. When the last keyframe of a property goes, the property
  * gets back the static value it had before any preset touched it.
  */
+/*
+ * Remove: the selected layers go back to static - every Text Library animation on them is removed
+ * (not only the one whose card was clicked), plus leftovers of Animation Composer presets.
+ */
 TL.removePreset = function (label) {
     var comp = TL.activeComp();
     if (!comp) return TL.err("No active composition.");
     var sel = comp.selectedLayers, layers = [], i;
     for (i = 0; i < sel.length; i++) layers.push(sel[i]);
-    if (!layers.length) return TL.err("Select the layers to remove \"" + label + "\" from.");
+    if (!layers.length) return TL.err("Select the layers to remove the animation from.");
 
     app.beginUndoGroup("Text Library: Remove " + label);
     try {
         var touched = 0;
         for (i = 0; i < layers.length; i++) {
             var changes = 0;
-            TL.withUnlocked(layers[i], function () { changes = TL.removePresetFromLayer(layers[i], label, comp.frameDuration / 2); });
+            TL.withUnlocked(layers[i], function () { changes = TL.removeAllFromLayer(layers[i], label, comp.frameDuration / 2); });
             if (changes) touched++;
         }
-        if (!touched) return TL.err("\"" + label + "\" was not found on the selected layers.");
+        if (!touched) return TL.err("No Text Library animation found on the selected layers.");
         return TL.ok({ layers: touched });
     } catch (e) {
         return TL.errFromException(e);
     } finally {
         app.endUndoGroup();
     }
+};
+
+/* Labels of every preset applied to the layer: recorded ones + " [label]" tags on added groups. */
+TL.presetLabels = function (layer, first) {
+    var seen = {}, out = [];
+    function add(l) { if (l && !seen[l]) { seen[l] = true; out.push(l); } }
+    add(first);
+    var data = TL.readMark(layer, "TLA") || {};
+    for (var k in data) if (data.hasOwnProperty(k) && k !== "__orig") add(k);
+    var parades = [["ADBE Text Properties", "ADBE Text Animators"], ["ADBE Mask Parade"], ["ADBE Effect Parade"]];
+    for (var p = 0; p < parades.length; p++) {
+        var g = TL.resolve(layer, parades[p]);
+        for (var j = 1; g && j <= g.numProperties; j++) {
+            var m = / \[([^\]]+)\]$/.exec(g.property(j).name);
+            if (m) add(m[1]);
+        }
+    }
+    return out;
+};
+
+TL.removeAllFromLayer = function (layer, label, tol) {
+    var changes = 0, labels = TL.presetLabels(layer, label);
+    for (var i = 0; i < labels.length; i++) changes += TL.removePresetFromLayer(layer, labels[i], tol);
+    changes += TL.stripAnimationComposer(layer);
+    TL.cleanTrMarkers(layer);
+    // switches the presets turned on (motion blur, 3D) go back off once nothing is left
+    var sw = TL.readMark(layer, "TLS");
+    if (sw && !TL.readMark(layer, "TLA")) {
+        try { if (sw.mb) layer.motionBlur = false; } catch (e1) {}
+        try { if (sw.pc) layer.threeDPerChar = false; } catch (e2) {}
+        try { if (sw.d3) layer.threeDLayer = false; } catch (e3) {}
+        TL.writeMark(layer, "TLS", null);
+        changes++;
+    }
+    return changes;
+};
+
+/* Animation Composer presets: "AC IN/OUT ..." animators, its pseudo control effects, its TR markers and expressions. */
+TL.stripAnimationComposer = function (layer) {
+    var changes = 0, j;
+    try {
+        var path = ["ADBE Text Properties", "ADBE Text Animators"];
+        for (j = TL.resolve(layer, path).numProperties; j >= 1; j--) {
+            var a = TL.resolve(layer, path).property(j);
+            if (a && /^AC (IN|OUT) \[/.test(a.name)) { a.remove(); changes++; }
+        }
+    } catch (e1) {}
+    try {
+        for (j = layer.property("ADBE Effect Parade").numProperties; j >= 1; j--) {
+            var ef = layer.property("ADBE Effect Parade").property(j);
+            if (ef && ef.matchName.indexOf("Pseudo/MHAC") === 0) { ef.remove(); changes++; }
+        }
+    } catch (e2) {}
+    try {
+        var mk = layer.property("ADBE Marker");
+        for (j = mk.numKeys; j >= 1; j--) {
+            var p = mk.keyValue(j).getParameters();
+            if (p && p["zzzzzzzzzzzzzzz_ACMarkerType"] !== undefined) { mk.removeKey(j); changes++; }
+        }
+    } catch (e3) {}
+    try {
+        var mo = layer.property("ADBE Text Properties").property("ADBE Text More Options");
+        for (j = 1; j <= mo.numProperties; j++) {
+            var q = mo.property(j);
+            if (q && q.canSetExpression && q.expression.indexOf("getAnimationComposerPresetValue") >= 0) { q.expression = ""; changes++; }
+        }
+    } catch (e4) {}
+    return changes;
 };
 
 TL.removePresetFromLayer = function (layer, label, tol) {
@@ -595,6 +908,8 @@ TL.removePresetFromLayer = function (layer, label, tol) {
             if (n.length >= suffix.length && n.substr(n.length - suffix.length) === suffix) { item.remove(); changes++; }
         }
     }
+
+    TL.cleanTrMarkers(layer);
 
     // 2) recorded effects, keyframes and expressions
     var data = TL.readMark(layer, "TLA");
@@ -1077,13 +1392,25 @@ TL.newLayer = function (type) {
     var sel = comp.selectedLayers;
     var above = sel.length ? sel[0] : null;
 
-    // solid: After Effects' own Solid Settings dialog (colour, size, name) - like Layer > New > Solid
+    // solid: made right away at the comp's size (AE's New Solid dialog remembers the last size instead),
+    // then AE's own Solid Settings dialog opens on it for the colour / name - Cancel keeps a white solid
     if (type === "solid") {
-        var before = comp.numLayers, cmd = app.findMenuCommandId("Solid...");
-        app.executeCommand(cmd > 0 ? cmd : 2038);
-        if (comp.numLayers === before) return TL.ok({ name: null }); // dialog cancelled
-        var made = comp.selectedLayers.length ? comp.selectedLayers[0] : comp.layer(1);
-        return TL.ok({ name: made.name });
+        var L;
+        app.beginUndoGroup("Text Library: New Solid");
+        try {
+            L = comp.layers.addSolid([1, 1, 1], TL.nextName(comp, "White Solid"), comp.width, comp.height, comp.pixelAspect, comp.duration);
+            if (above) L.moveBefore(above);
+            for (var j = 1; j <= comp.numLayers; j++) comp.layer(j).selected = false;
+            L.selected = true;
+        } catch (eS) {
+            return TL.errFromException(eS);
+        } finally {
+            app.endUndoGroup();
+        }
+        comp.openInViewer(); // Layer > Solid Settings works on the selected layer of the comp in front
+        var cmd = app.findMenuCommandId("Solid Settings...");
+        if (cmd > 0) app.executeCommand(cmd);
+        return TL.ok({ name: L.name });
     }
 
     app.beginUndoGroup("Text Library: New Layer");
@@ -2505,6 +2832,679 @@ TL.carouselSet = function (ctrlName, values) {
         return TL.ok({ skipped: skipped });
     } catch (e) {
         return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+/* ------------------------------------------------------------------ */
+/* PixelateClick: the user's "Scene 2" reveal rig, rebuilt on any layer */
+/* ------------------------------------------------------------------ */
+
+TL.PX_COMP = "PixelateClick reveal";
+TL.PX_SIZE = 2400;        // square precomp so the noise ring is not clipped
+TL.PX_MASK_END = 1050.75; // reveal circle radius at the end in the original (732 / 2 * 287.091%)
+
+// two keys with the original eases: ease out 33% on the first, full ease in on the second
+// (reverse: the same curve played backwards - full ease out on the first, 33% ease in on the second)
+TL.pxKeys = function (prop, t1, v1, t2, v2, reverse) {
+    prop.setValueAtTime(t1, v1);
+    prop.setValueAtTime(t2, v2);
+    var n = prop.keyInTemporalEase(1).length, a = [], b = [], c = [], d = [];
+    var e1 = reverse ? 100 : 33.33, e2 = reverse ? 33.33 : 100;
+    for (var i = 0; i < n; i++) {
+        a.push(new KeyframeEase(0, 33.33)); b.push(new KeyframeEase(0, e1));
+        c.push(new KeyframeEase(0, e2)); d.push(new KeyframeEase(0, 16.67));
+    }
+    prop.setTemporalEaseAtKey(prop.nearestKeyIndex(t1), a, b);
+    prop.setTemporalEaseAtKey(prop.nearestKeyIndex(t2), c, d);
+};
+
+// place a noise precomp layer: plays its first `dur` seconds from t0 + start, or backwards
+// (time remap) so the whole reveal runs in reverse inside [t0, t0 + 1.75];
+// sc stretches it all in time (Duration / 1.75)
+TL.pxTiming = function (L, t0, start, dur, reverse, sc) {
+    if (!reverse) {
+        L.stretch = 100 * sc;
+        L.startTime = t0 + start * sc;
+        L.outPoint = t0 + (start + dur) * sc;
+        return;
+    }
+    var a = t0 + (1.75 - start - dur) * sc, b = t0 + (1.75 - start) * sc;
+    L.startTime = a;
+    L.timeRemapEnabled = true;
+    var tr = L.property("ADBE Time Remapping");
+    // AE adds keys at the in / out point; removing every key would switch time remap off,
+    // so the new keys go in first and the old ones are removed after
+    tr.setValueAtTime(a, dur);
+    tr.setValueAtTime(b, 0);
+    for (var i = tr.numKeys; i >= 1; i--) {
+        var kt = tr.keyTime(i);
+        if (Math.abs(kt - a) > 1e-4 && Math.abs(kt - b) > 1e-4) tr.removeKey(i);
+    }
+    L.inPoint = a;
+    L.outPoint = b;
+};
+
+TL.pxEllipse = function (layer, size) {
+    var g = layer.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+    g.name = "Ellipse 1";
+    var v = g.property("ADBE Vectors Group");
+    v.addProperty("ADBE Vector Shape - Ellipse").property("ADBE Vector Ellipse Size").setValue([size, size]);
+    return v;
+};
+
+// Deep Glow when it is installed, otherwise the built-in Glow; amount in % (100 = original, 0 = no glow)
+TL.pxGlow = function (layer, amount) {
+    if (amount <= 0) return "";
+    var fx = layer.property("ADBE Effect Parade");
+    if (fx.canAddProperty("PEDG")) {
+        // Exposure is in stops: twice the glow = one stop more
+        fx.addProperty("PEDG").property("PEDG-0002").setValue(0.11 + Math.log(amount / 100) / Math.LN2);
+        return "Deep Glow";
+    }
+    fx.addProperty("ADBE Glo2").property("ADBE Glo2-0004").setValue(amount / 100); // Glow Intensity
+    return "Glow";
+};
+
+// wave settings from the panel, clamped; every value is % of the original rig except dur (seconds)
+TL.pxOptions = function (o) {
+    o = o || {};
+    var num = function (v, d, lo, hi) { v = Number(v); return isNaN(v) ? d : Math.max(lo, Math.min(hi, v)); };
+    return {
+        mode: (o.mode === "out" || o.mode === "static") ? o.mode : "in",
+        auto: !!o.auto,
+        pixel: Math.round(num(o.pixel, 100, 1, 1000)),
+        dur: num(o.dur, 1.75, 0.2, 20),
+        width: Math.round(num(o.width, 100, 10, 500)),
+        lead: Math.round(num(o.lead, 100, 30, 300)),
+        tail: Math.round(num(o.tail, 100, 10, 300)),
+        soft: Math.round(num(o.soft, 100, 0, 400)),
+        glow: Math.round(num(o.glow, 100, 0, 400)),
+        edges: Math.round(num(o.edges, 100, 0, 100)),
+        lines: Math.round(num(o.lines, 100, 0, 500)),
+        speed: Math.round(num(o.speed, 100, 0, 500))
+    };
+};
+
+/*
+ * Line width of the grid (Reveal edges). Find Edges draws ~1 px lines in the reveal precomp, so on screen
+ * they are usually 1 px or thinner already: below 100 % they fade in step with the width (a sub-pixel
+ * line can only get fainter), above 100 % Minimax grows them inside the precomp, keeping the original look.
+ */
+TL.pxLineWidth = function (E, o) {
+    if (o.lines < 100) {
+        E.property("ADBE Transform Group").property("ADBE Opacity").setValue(o.edges * o.lines / 100);
+    } else if (o.lines >= 150) {
+        var mm = E.property("ADBE Effect Parade").addProperty("ADBE Minimax");
+        mm.property("ADBE Minimax-0001").setValue(2);                                  // Operation: Maximum (bright lines grow)
+        mm.property("ADBE Minimax-0002").setValue(Math.round((o.lines / 100 - 1) / 2)); // Radius, px of the precomp
+    }
+};
+
+// parenting keeps the layer where it was on screen by changing its scale / rotation - the rig needs them at rest
+TL.pxParent = function (layer, parent) {
+    layer.parent = parent;
+    var t = layer.property("ADBE Transform Group");
+    t.property("ADBE Scale").setValue([100, 100, 100]);
+    var rot = layer.threeDLayer ? ["ADBE Rotate X", "ADBE Rotate Y", "ADBE Rotate Z"] : ["ADBE Rotate Z"];
+    for (var i = 0; i < rot.length; i++) t.property(rot[i]).setValue(0);
+    if (layer.threeDLayer) t.property("ADBE Orientation").setValue([0, 0, 0]);
+};
+
+TL.pxTritone = function (layer, hi, mid) {
+    var t = layer.property("ADBE Effect Parade").addProperty("ADBE Tritone");
+    t.property("ADBE Tritone-0001").setValue(hi);
+    t.property("ADBE Tritone-0002").setValue(mid);
+};
+
+// "Scene 1 reveal": block noise seen through a growing, blurred green ring - made once per set of
+// wave settings (pixel size, width, lead, tail, softness, noise speed), e.g. "PixelateClick reveal p60 w150"
+TL.pxRevealComp = function (o) {
+    var root = TL.getProjectFolder(TL.PROJECT_FOLDER);
+    var keys = [["p", o.pixel], ["w", o.width], ["l", o.lead], ["t", o.tail], ["s", o.soft], ["n", o.speed]], tag = "";
+    for (var i = 0; i < keys.length; i++) if (keys[i][1] !== 100) tag += " " + keys[i][0] + keys[i][1];
+    var name = TL.PX_COMP + tag;
+    var c = TL.findCompIn(root, name);
+    if (c) return c;
+    var S = TL.PX_SIZE;
+    c = app.project.items.addComp(name, S, S, 1, 3.5, 60);
+    c.parentFolder = root;
+
+    var solid = c.layers.addSolid([1, 1, 1], "White solid", S, S, 1, 3.5);
+    var n = solid.property("ADBE Effect Parade").addProperty("ADBE Fractal Noise");
+    n.property("ADBE Fractal Noise-0001").setValue(11);
+    n.property("ADBE Fractal Noise-0002").setValue(1);
+    n.property("ADBE Fractal Noise-0004").setValue(110);
+    n.property("ADBE Fractal Noise-0005").setValue(5);
+    n.property("ADBE Fractal Noise-0015").setValue(1);
+    n.property("ADBE Fractal Noise-0010").setValue(o.pixel); // Scale: the size of the blocks (and so of the edge grid)
+    n.property("ADBE Fractal Noise-0023").expression = "time*" + (2 * o.speed); // 200 / s originally
+
+    var ring = c.layers.addShape();
+    ring.name = "Shape Layer-Stroke";
+    var st = TL.pxEllipse(ring, 792).addProperty("ADBE Vector Graphic - Stroke");
+    st.property("ADBE Vector Stroke Color").setValue([0, 1, 0.0706, 1]);
+    st.property("ADBE Vector Stroke Width").setValue(295 * o.width / 100);
+    if (o.soft > 0) ring.property("ADBE Effect Parade").addProperty("ADBE Box Blur2").property("ADBE Box Blur2-0001").setValue(50 * o.soft / 100);
+    var tr = ring.property("ADBE Transform Group");
+    tr.property("ADBE Position").setValue([S / 2, S / 2]);
+    var end = 424 * o.lead / 100;
+    TL.pxKeys(tr.property("ADBE Scale"), 0, [0, 0, 100], 1.683, [end, end, 100]);
+    // Tail: how long the wave takes to fade out at the end (0.5 s originally)
+    TL.pxKeys(tr.property("ADBE Opacity"), Math.max(0.02, 1.683 - 0.5 * o.tail / 100), 100, 1.683, 0);
+    solid.setTrackMatte(ring, TrackMatteType.ALPHA);
+    ring.enabled = false;
+    return c;
+};
+
+// full brightness, a little more saturation so the blocks read as colour; null for black / grey (keep the aqua)
+TL.pxNormColor = function (c) {
+    if (!c) return null;
+    var mx = Math.max(c[0], c[1], c[2]), mn = Math.min(c[0], c[1], c[2]);
+    if (mx < 0.02 || mx - mn < 0.04) return null;
+    var out = [];
+    for (var k = 0; k < 3; k++) out.push(Math.max(0, Math.min(1, ((c[k] - mn) * 1.15 + mn * 0.85) / mx)));
+    return out;
+};
+
+// most vivid of some colours: saturation x brightness
+TL.pxVivid = function (list) {
+    var best = null, score = -1;
+    for (var i = 0; i < list.length; i++) {
+        var c = list[i], mx = Math.max(c[0], c[1], c[2]), mn = Math.min(c[0], c[1], c[2]), s = (mx - mn) * mx;
+        if (s > score) { score = s; best = c; }
+    }
+    return best;
+};
+
+// shape / text layers: their fill and stroke colours (sampleImage does not work on them - it stops the script)
+TL.pxVectorColors = function (T, t) {
+    var out = [];
+    if (T instanceof TextLayer) {
+        try {
+            var doc = T.property("ADBE Text Properties").property("ADBE Text Document").valueAtTime(t, false);
+            if (doc.applyFill) out.push(doc.fillColor);
+            if (doc.applyStroke) out.push(doc.strokeColor);
+        } catch (e) {}
+        return out;
+    }
+    var walk = function (g) {
+        for (var i = 1; i <= g.numProperties; i++) {
+            var p = g.property(i);
+            if (p.enabled === false) continue;
+            var mn = p.matchName;
+            if (mn === "ADBE Vector Graphic - Fill") out.push(p.property("ADBE Vector Fill Color").valueAtTime(t, false));
+            else if (mn === "ADBE Vector Graphic - Stroke") out.push(p.property("ADBE Vector Stroke Color").valueAtTime(t, false));
+            else if (p.propertyType !== PropertyType.PROPERTY) walk(p);
+        }
+    };
+    walk(T.property("ADBE Root Vectors Group"));
+    return out;
+};
+
+// Auto color: the most vivid colour of the layer - shape / text from their colours, anything else
+// from its pixels (10 x 10 areas, sampled by an expression on a temporary null)
+TL.pxAutoColor = function (comp, T, t) {
+    if (T instanceof ShapeLayer || T instanceof TextLayer) return TL.pxNormColor(TL.pxVivid(TL.pxVectorColors(T, t)));
+    var items = app.project.numItems;
+    var tmp = comp.layers.addNull();
+    var newSolid = app.project.numItems > items; // AE may reuse an existing null solid - that one stays
+    try {
+        var p = tmp.property("ADBE Effect Parade").addProperty("ADBE Color Control").property(1);
+        p.expression = [
+            "var L = thisComp.layer(" + T.index + "), t = " + t + ";",
+            "var r = L.sourceRectAtTime(t, false), n = 10, best = [0, 0, 0, 1], score = -1;",
+            "for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) {",
+            "  var c = L.sampleImage([r.left + (i + .5) * r.width / n, r.top + (j + .5) * r.height / n], [r.width / n / 2, r.height / n / 2], true, t);",
+            "  if (c[3] < .5) continue;",
+            "  var mx = Math.max(c[0], c[1], c[2]), mn = Math.min(c[0], c[1], c[2]), s = (mx - mn) * mx;",
+            "  if (s > score) { score = s; best = c; }",
+            "}",
+            "best;"
+        ].join("\n");
+        return TL.pxNormColor(p.valueAtTime(t, false));
+    } catch (e) {
+        return null;
+    } finally {
+        var solid = tmp.source;
+        tmp.remove();
+        try { if (newSolid && solid && solid.usedIn.length === 0) solid.remove(); } catch (eS) {}
+    }
+};
+
+// the rig's aqua colours re-tinted: every colour keeps its brightness, the hue comes from c
+TL.pxTint = function (col, c) {
+    if (!c) return col;
+    var f = Math.max(col[0], col[1], col[2]);
+    return [c[0] * f, c[1] * f, c[2] * f, 1];
+};
+
+TL.pxIsReveal = function (L) {
+    return !!(L && L.source && L.source instanceof CompItem && L.source.name.indexOf(TL.PX_COMP) === 0);
+};
+
+// the layer the effect is on, from that layer itself or any of its rig layers
+TL.pxTarget = function (comp, L) {
+    if (TL.pxIsReveal(L)) {
+        while (L.parent && TL.pxIsReveal(L.parent)) L = L.parent;
+        return L.parent || null;
+    }
+    if (L.name === "Ui reveal layer") {
+        for (var i = 1; i <= comp.numLayers; i++) if (comp.layer(i).trackMatteLayer === L) return comp.layer(i);
+        return null;
+    }
+    var m = L.trackMatteLayer;
+    if (m && m.name === "Ui reveal layer") return L;
+    // Static has no matte: the layer is the parent of the Reveal layer
+    for (var j = 1; j <= comp.numLayers; j++) if (comp.layer(j).parent === L && TL.pxIsReveal(comp.layer(j))) return L;
+    return null;
+};
+
+// take the rig off T: its Reveal layers and matte are deleted, T goes back to static without a matte
+TL.pxStrip = function (comp, T, used) {
+    var M = T.trackMatteLayer, kill = [], j;
+    for (j = 1; j <= comp.numLayers; j++) {
+        var L = comp.layer(j);
+        if (TL.pxIsReveal(L) && TL.pxTarget(comp, L) === T) kill.push(L);
+    }
+    try { T.removeTrackMatte(); } catch (eM) { T.trackMatteType = TrackMatteType.NO_TRACK_MATTE; }
+    if (M && M.name === "Ui reveal layer") kill.push(M);
+    for (j = 0; j < kill.length; j++) {
+        if (kill[j].source) used.push(kill[j].source);
+        kill[j].remove();
+    }
+    T.enabled = true;
+    TL.writeMark(T, "TLPX", null);
+};
+
+// the noise precomps go too once nothing uses them
+TL.pxCleanComps = function (comps) {
+    for (var i = 0; i < comps.length; i++) {
+        try {
+            if (comps[i].usedIn.length !== 0) continue;
+            var solids = [];
+            for (var j = 1; j <= comps[i].numLayers; j++) if (comps[i].layer(j).source) solids.push(comps[i].layer(j).source);
+            comps[i].remove();
+            for (j = 0; j < solids.length; j++) if (solids[j].usedIn.length === 0) solids[j].remove(); // its "White solid" item
+        } catch (e) {} // already removed
+    }
+};
+
+TL.pixelateRemove = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var sel = comp.selectedLayers, targets = [], i, j;
+    for (i = 0; i < sel.length; i++) {
+        var T = TL.pxTarget(comp, sel[i]);
+        if (!T) continue;
+        for (j = 0; j < targets.length; j++) if (targets[j] === T) break;
+        if (j === targets.length) targets.push(T);
+    }
+    if (!targets.length) return TL.err("Select a layer with PixelateClick (or one of its Reveal layers).");
+
+    app.beginUndoGroup("Text Library: Remove PixelateClick");
+    try {
+        var used = [];
+        for (i = 0; i < targets.length; i++) {
+            TL.pxStrip(comp, targets[i], used);
+            targets[i].selected = true;
+        }
+        TL.pxCleanComps(used);
+        return TL.ok({ count: targets.length });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+// fx, fy: where the reveal starts, 0..1 across the layer (0,0 = top left); opts: see TL.pxOptions -
+// mode "in" (appear), "out" (disappear - the appear played backwards) or "static" (always visible),
+// auto: tint the effect with the layer's most vivid colour instead of aqua, plus the wave settings
+TL.pixelateAdd = function (fx, fy, opts) {
+    var o = TL.pxOptions(opts), mode = o.mode, reverse = mode === "out";
+    var upd = !!(opts && opts.update); // live update from the panel: rebuild the existing rigs with new settings
+    var sc = o.dur / 1.75, D = o.dur;
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+
+    var targets = [], i, j, L;
+    for (i = 0; i < comp.selectedLayers.length; i++) {
+        L = comp.selectedLayers[i];
+        L = TL.pxTarget(comp, L) || L; // a selected Reveal layer stands for the layer it is on
+        if (TL.pxIsReveal(L) || L.name === "Ui reveal layer") continue;
+        if (upd && TL.pxTarget(comp, L) !== L) continue; // update: only layers that have the effect
+        if (!(L instanceof AVLayer || L instanceof ShapeLayer || L instanceof TextLayer)) continue;
+        for (j = 0; j < targets.length; j++) if (targets[j] === L) break;
+        if (j === targets.length) targets.push(L);
+    }
+
+    var marks = [];
+    for (i = 0; i < targets.length; i++) marks.push(TL.readMark(targets[i], "TLPX"));
+    app.beginUndoGroup(upd ? "Text Library: PixelateClick update" : "Text Library: PixelateClick");
+    try {
+        // adding again replaces the old rig (e.g. to change the pixel size)
+        var old = [];
+        for (i = 0; i < targets.length; i++) if (TL.pxTarget(comp, targets[i]) === targets[i]) TL.pxStrip(comp, targets[i], old);
+        TL.pxCleanComps(old);
+
+        // nothing selected in the comp: bring in what is selected in the Project panel
+        if (upd && !targets.length) return TL.ok({ count: 0 });
+        if (!targets.length) {
+            var sel = app.project.selection;
+            for (i = 0; i < sel.length; i++) {
+                var it = sel[i];
+                if (it === comp || !(it instanceof FootageItem || it instanceof CompItem) || !it.hasVideo) continue;
+                L = comp.layers.add(it);
+                L.startTime = comp.time;
+                targets.push(L);
+            }
+        }
+        if (!targets.length) return TL.err("Select a layer in the comp, or an image / item in the Project panel.");
+
+        var src = TL.pxRevealComp(o), S = TL.PX_SIZE, glow = "", colors = [];
+        var ALPHA = TrackMatteType.ALPHA;
+        var edges = [ // two glowing edge passes, one frame before and three frames after the reveal
+            { start: -0.0167, dur: 1.7, hi: [0, 0.2784, 0.249, 1], mid: [0, 0.6706, 0.5996, 1] },
+            { start: 0.05, dur: 1.783, hi: [0, 0.4, 0.3576, 1], mid: [0.0982, 0.2235, 0.2103, 1] }
+        ];
+        for (i = 0; i < targets.length; i++) {
+            var T = targets[i];
+            var mk = upd ? marks[i] : null; // update: same start time and colour as when it was added
+            var t0 = mk && mk.t0 !== undefined ? mk.t0 : Math.max(comp.time, T.inPoint);
+            var tint = !o.auto ? null : (mk && mk.tint ? mk.tint : TL.pxAutoColor(comp, T, t0));
+            colors.push(tint);
+            var r = T.sourceRectAtTime(t0, false);
+            var ox = r.left + fx * r.width, oy = r.top + fy * r.height;
+            var R = 0, cs = [[r.left, r.top], [r.left + r.width, r.top], [r.left, r.top + r.height], [r.left + r.width, r.top + r.height]];
+            for (j = 0; j < 4; j++) R = Math.max(R, Math.sqrt(Math.pow(cs[j][0] - ox, 2) + Math.pow(cs[j][1] - oy, 2)));
+            var k = Math.max(R, 1) * 1.1 / TL.PX_MASK_END; // the circle reaches the farthest corner
+            var is3D = T.threeDLayer;
+            var pos = is3D ? [ox, oy, 0] : [ox, oy];
+
+            // matte: blurred white circle growing from the chosen point (Disappear: shrinking back to it;
+            // Static: no matte, the layer stays at full opacity and only the noise ring runs over it)
+            var M = null;
+            if (mode !== "static") {
+                M = comp.layers.addShape();
+                M.name = "Ui reveal layer";
+                M.label = 8;
+                TL.pxEllipse(M, 732).addProperty("ADBE Vector Graphic - Fill").property("ADBE Vector Fill Color").setValue([1, 1, 1, 1]);
+                if (o.soft > 0) M.property("ADBE Effect Parade").addProperty("ADBE Box Blur2").property("ADBE Box Blur2-0001").setValue(43 * o.soft / 100);
+                M.threeDLayer = is3D;
+                M.moveBefore(T);
+                TL.pxParent(M, T);
+                M.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
+                var none = [0, 0, 100], full = [287.091 * k, 287.091 * k, 100];
+                TL.pxKeys(M.property("ADBE Transform Group").property("ADBE Scale"), t0, reverse ? full : none, t0 + D, reverse ? none : full, reverse);
+                M.inPoint = T.inPoint;
+                M.outPoint = T.outPoint;
+                T.setTrackMatte(M, ALPHA);
+            }
+
+            // the noise ring on top of the design
+            var RV = comp.layers.add(src);
+            RV.name = "Reveal";
+            RV.label = 9;
+            RV.threeDLayer = is3D;
+            RV.moveBefore(M || T);
+            TL.pxParent(RV, T);
+            RV.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
+            RV.property("ADBE Transform Group").property("ADBE Scale").setValue([98.98 * k, 98.98 * k, 98.98 * k]);
+            TL.pxTiming(RV, t0, 0, 1.75, reverse, sc);
+            TL.pxTritone(RV, [0, 0, 0, 1], TL.pxTint([0, 1, 0.8941, 1], tint));
+            glow = TL.pxGlow(RV, o.glow);
+            RV.setTrackMatte(T, ALPHA);
+
+            var above = RV;
+            for (j = o.edges > 0 && o.lines > 0 ? edges.length - 1 : -1; j >= 0; j--) {
+                var e = edges[j], E = comp.layers.add(src);
+                E.name = "Reveal edges";
+                E.label = 9;
+                E.threeDLayer = is3D;
+                E.moveBefore(above);
+                E.blendingMode = BlendingMode.ADD;
+                TL.pxParent(E, RV);
+                E.property("ADBE Transform Group").property("ADBE Position").setValue(is3D ? [S / 2, S / 2, 0] : [S / 2, S / 2]);
+                TL.pxTiming(E, t0, e.start, e.dur, reverse, sc);
+                E.property("ADBE Transform Group").property("ADBE Opacity").setValue(o.edges);
+                TL.pxTritone(E, TL.pxTint(e.hi, tint), TL.pxTint(e.mid, tint));
+                TL.pxGlow(E, o.glow);
+                E.property("ADBE Effect Parade").addProperty("ADBE Find Edges").property("ADBE Find Edges-0001").setValue(1);
+                TL.pxLineWidth(E, o);
+                E.setTrackMatte(T, ALPHA);
+                above = E;
+            }
+            if (M) M.enabled = false;
+            T.enabled = true;
+            TL.writeMark(T, "TLPX", { t0: t0, tint: tint }); // live updates rebuild the rig from here
+        }
+
+        for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+        for (i = 0; i < targets.length; i++) targets[i].selected = true;
+        return TL.ok({ count: targets.length, glow: glow, colors: colors });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+/* ------------------------------------------------------------------ */
+/* Progressive Blur: Compound Blur driven by a gradient map, per layer  */
+/* ------------------------------------------------------------------ */
+
+// Each rig on layer T (a layer can have several - e.g. one from the left, one from the right):
+// "PB Start n" / "PB End n" nulls parented to T, a hidden "PB Map n" layer of a precomp the size of T's
+// pixel buffer with a Gradient Ramp (black = sharp, white = full blur) whose points follow the nulls,
+// and a Compound Blur "Progressive Blur n" on T reading that map. The first rig has no number.
+TL.PB_FX = "Progressive Blur";
+TL.PB_HANDLE_RE = /^PB (Start|End)( \d+)? - /;
+
+// where effects on T read a point: shape / text layers work in a comp-sized buffer in comp coordinates
+// (checked by render), footage / precomps in their own layer space - a handle parented to T is already there
+TL.pbPointExpr = function (T, compName, handleName) {
+    var L = "var L = comp(" + TL.quote(compName) + ").layer(" + TL.quote(handleName) + ");\n";
+    return (T instanceof ShapeLayer || T instanceof TextLayer) ? L + "L.toComp(L.anchorPoint);" : L + "L.transform.position;";
+};
+
+// the rig number of a Progressive Blur effect or a PB layer name (1 when it has none)
+TL.pbNum = function (name) {
+    var m = /^(?:Progressive Blur|PB (?:Start|End|Map))( (\d+))?( - |$)/.exec(name);
+    return m && m[2] ? parseInt(m[2], 10) : 1;
+};
+TL.pbSuffix = function (n) { return n > 1 ? " " + n : ""; };
+
+TL.pbEffects = function (T) {
+    var out = [], fx = T.property("ADBE Effect Parade");
+    if (!fx) return out;
+    for (var i = 1; i <= fx.numProperties; i++) {
+        var e = fx.property(i);
+        if (e.matchName === "ADBE Compound Blur" && /^Progressive Blur( \d+)?$/.test(e.name)) out.push(e);
+    }
+    return out;
+};
+
+// which rigs a selected layer stands for: the layer itself = all its rigs, a handle / map = just that rig
+TL.pbPick = function (comp, L) {
+    var all = TL.pbEffects(L);
+    if (all.length) return { T: L, effects: all };
+    if (L.parent && TL.PB_HANDLE_RE.test(L.name)) {
+        var n = TL.pbNum(L.name), list = TL.pbEffects(L.parent);
+        for (var i = 0; i < list.length; i++) if (TL.pbNum(list[i].name) === n) return { T: L.parent, effects: [list[i]] };
+        return null;
+    }
+    for (var j = 1; j <= comp.numLayers; j++) {
+        var es = TL.pbEffects(comp.layer(j));
+        for (var k = 0; k < es.length; k++) {
+            if (es[k].property("ADBE Compound Blur-0001").value === L.index) return { T: comp.layer(j), effects: [es[k]] };
+        }
+    }
+    return null;
+};
+
+// take one rig off T: its effect, map layer (+ precomp and solid) and handles
+TL.pbStripOne = function (comp, T, e) {
+    var n = TL.pbNum(e.name), mapIdx = e.property("ADBE Compound Blur-0001").value, kill = [], i;
+    for (i = 1; i <= comp.numLayers; i++) {
+        var L = comp.layer(i);
+        if (L.index === mapIdx || (L.parent === T && TL.PB_HANDLE_RE.test(L.name) && TL.pbNum(L.name) === n)) kill.push(L);
+    }
+    e.remove();
+    for (i = 0; i < kill.length; i++) {
+        var src = kill[i].source;
+        kill[i].remove();
+        try {
+            if (src && src.usedIn.length === 0) {
+                if (src instanceof CompItem) {
+                    var inner = [];
+                    for (var j = 1; j <= src.numLayers; j++) if (src.layer(j).source) inner.push(src.layer(j).source);
+                    src.remove();
+                    for (j = 0; j < inner.length; j++) if (inner[j].usedIn.length === 0) inner[j].remove();
+                } else {
+                    src.remove(); // the null's solid
+                }
+            }
+        } catch (eS) {}
+    }
+};
+
+// a layer name not used yet in the comp (the ramp expressions find the handles by name)
+TL.pbFreeName = function (comp, base) {
+    var name = base, k = 2, taken = function (s) {
+        for (var i = 1; i <= comp.numLayers; i++) if (comp.layer(i).name === s) return true;
+        return false;
+    };
+    while (taken(name)) name = base + " #" + (k++);
+    return name;
+};
+
+TL.pbHandle = function (comp, T, name, pos) {
+    var n = comp.layers.addNull(comp.duration);
+    n.name = TL.pbFreeName(comp, name);
+    n.label = 2;
+    n.moveBefore(T);
+    n.parent = T;
+    var t = n.property("ADBE Transform Group");
+    t.property("ADBE Scale").setValue([100, 100, 100]); // parenting rescales to keep the look - not needed here
+    t.property("ADBE Rotate Z").setValue(0);
+    t.property("ADBE Position").setValue(pos);
+    n.inPoint = T.inPoint;
+    n.outPoint = T.outPoint;
+    return n;
+};
+
+// start / end: 0..1 across the layer's visible content (0,0 = top left); blur: maximum blur in px.
+// A layer that already has a Progressive Blur gets one more (Progressive Blur 2, 3, ...).
+TL.progressiveBlurAdd = function (start, end, blur) {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    blur = Math.max(0, Math.min(500, Number(blur) || 0));
+
+    var targets = [], i, j, L, p;
+    for (i = 0; i < comp.selectedLayers.length; i++) {
+        L = comp.selectedLayers[i];
+        p = TL.pbPick(comp, L);
+        if (p) L = p.T; // a selected handle / map stands for the layer it belongs to
+        if (/^PB (Start|End|Map)/.test(L.name)) continue;
+        if (!(L instanceof AVLayer || L instanceof ShapeLayer || L instanceof TextLayer)) continue; // not subclasses in ExtendScript
+        for (j = 0; j < targets.length; j++) if (targets[j] === L) break;
+        if (j === targets.length) targets.push(L);
+    }
+
+    app.beginUndoGroup("Text Library: Progressive Blur");
+    try {
+        // nothing selected in the comp: bring in what is selected in the Project panel
+        if (!targets.length) {
+            var sel = app.project.selection;
+            for (i = 0; i < sel.length; i++) {
+                var it = sel[i];
+                if (it === comp || !(it instanceof FootageItem || it instanceof CompItem) || !it.hasVideo) continue;
+                L = comp.layers.add(it);
+                L.startTime = comp.time;
+                targets.push(L);
+            }
+        }
+        if (!targets.length) return TL.err("Select a layer in the comp, or an image / item in the Project panel.");
+
+        var root = TL.getProjectFolder(TL.PROJECT_FOLDER), nums = [];
+        for (i = 0; i < targets.length; i++) {
+            var T = targets[i];
+            // the next free rig number on this layer
+            var used = {}, have = TL.pbEffects(T), n = 1;
+            for (j = 0; j < have.length; j++) used[TL.pbNum(have[j].name)] = true;
+            while (used[n]) n++;
+            nums.push(n);
+
+            var r = T.sourceRectAtTime(Math.max(comp.time, T.inPoint), false);
+            var at = function (f) { return [r.left + f[0] * r.width, r.top + f[1] * r.height]; };
+            var tag = TL.pbSuffix(n) + " - " + T.name;
+            var hs = TL.pbHandle(comp, T, "PB Start" + tag, at(start));
+            var he = TL.pbHandle(comp, T, "PB End" + tag, at(end));
+
+            // the map: T's buffer size, ramp points follow the handles
+            var W = Math.max(4, Math.round(T.width)), H = Math.max(4, Math.round(T.height));
+            var mc = app.project.items.addComp("PB Map" + tag, W, H, 1, Math.max(comp.duration, 1), comp.frameRate);
+            mc.parentFolder = root;
+            var g = mc.layers.addSolid([0, 0, 0], "Gradient", W, H, 1, mc.duration);
+            var ramp = g.property("ADBE Effect Parade").addProperty("ADBE Ramp");
+            ramp.property("ADBE Ramp-0001").expression = TL.pbPointExpr(T, comp.name, hs.name);
+            ramp.property("ADBE Ramp-0003").expression = TL.pbPointExpr(T, comp.name, he.name);
+
+            var mapName = TL.pbFreeName(comp, "PB Map" + tag); // before adding: the new layer takes the comp's name
+            var M = comp.layers.add(mc);
+            M.name = mapName;
+            M.label = 15;
+            M.moveAfter(T);
+            M.enabled = false;
+
+            var cb = T.property("ADBE Effect Parade").addProperty("ADBE Compound Blur");
+            cb.name = TL.PB_FX + TL.pbSuffix(n);
+            cb.property("ADBE Compound Blur-0001").setValue(M.index);
+            cb.property("ADBE Compound Blur-0002").setValue(blur);
+        }
+
+        for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+        for (i = 0; i < targets.length; i++) targets[i].selected = true;
+        return TL.ok({ count: targets.length, nums: nums });
+    } catch (e) {
+        return TL.errFromException(e);
+    } finally {
+        app.endUndoGroup();
+    }
+};
+
+// the layer selected: all its blurs go; a PB Start / End / Map layer selected: only that blur goes
+TL.progressiveBlurRemove = function () {
+    var comp = TL.activeComp();
+    if (!comp) return TL.err("No active composition.");
+    var sel = comp.selectedLayers, picks = [], i, j, k;
+    for (i = 0; i < sel.length; i++) {
+        var p = TL.pbPick(comp, sel[i]);
+        if (p) picks.push(p);
+    }
+    if (!picks.length) return TL.err("Select a layer with Progressive Blur (or its PB Start / End / Map layer).");
+    app.beginUndoGroup("Text Library: Remove Progressive Blur");
+    try {
+        var done = [], layers = [];
+        for (i = 0; i < picks.length; i++) {
+            for (j = 0; j < picks[i].effects.length; j++) {
+                var e = picks[i].effects[j], key = picks[i].T.index + ":" + e.name;
+                for (k = 0; k < done.length; k++) if (done[k] === key) break;
+                if (k < done.length) continue; // start and end of the same blur both selected
+                done.push(key);
+                // after other rigs are removed the effect object may be stale: find it again by name
+                var list = TL.pbEffects(picks[i].T), live = null;
+                for (k = 0; k < list.length; k++) if (list[k].name === key.split(":")[1]) live = list[k];
+                if (live) TL.pbStripOne(comp, picks[i].T, live);
+            }
+            layers.push(picks[i].T);
+        }
+        for (i = 1; i <= comp.numLayers; i++) comp.layer(i).selected = false;
+        for (i = 0; i < layers.length; i++) layers[i].selected = true;
+        return TL.ok({ count: done.length });
+    } catch (e2) {
+        return TL.errFromException(e2);
     } finally {
         app.endUndoGroup();
     }
